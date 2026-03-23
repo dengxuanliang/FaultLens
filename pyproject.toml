@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "faultlens"
+version = "0.1.0"
+description = "Deterministic-first evaluation log attribution agent"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [{ name = "OpenAI Codex" }]
+dependencies = []
+
+[project.scripts]
+faultlens = "faultlens.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
