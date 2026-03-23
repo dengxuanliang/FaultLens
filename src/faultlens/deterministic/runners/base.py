@@ -5,13 +5,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, List, Mapping, Optional, Sequence
 import os
+import shutil
 import subprocess
 
 DEFAULT_OUTPUT_LIMIT = 4096
 DEFAULT_TIMEOUT_SECONDS = 10
 CONFINEMENT_BOUNDARY = (
-    "Execution is confined to a temporary workspace with sanitized cwd/env. "
-    "This is not an OS sandbox."
+    "Execution is sandboxed with sandbox-exec and confined to a temporary workspace. "
+    "If sandbox-exec is unavailable, runtime execution is disabled."
 )
 
 
@@ -53,9 +54,13 @@ def truncate_output(text: str, limit: int = DEFAULT_OUTPUT_LIMIT) -> str:
     return text[:limit]
 
 
+def sandbox_available() -> bool:
+    return shutil.which("sandbox-exec") is not None
+
+
 def workspace_env(extra_env: Optional[Mapping[str, str]] = None) -> Dict[str, str]:
     env: Dict[str, str] = {}
-    for key in ("PATH", "HOME", "TMPDIR", "TEMP", "TMP"):
+    for key in ("PATH", "TMPDIR", "TEMP", "TMP"):
         value = os.environ.get(key)
         if value:
             env[key] = value
@@ -64,6 +69,7 @@ def workspace_env(extra_env: Optional[Mapping[str, str]] = None) -> Dict[str, st
         for key, value in extra_env.items():
             env[key] = value
     env.pop("PYTHONPATH", None)
+    env.pop("HOME", None)
     return env
 
 
@@ -74,6 +80,26 @@ def write_workspace_files(workspace: Path, files: Mapping[str, str]) -> None:
         file_path.write_text(content, encoding="utf-8")
 
 
+def _sandboxed_command(command: Sequence[str], cwd: Path) -> Sequence[str]:
+    if not sandbox_available():
+        raise RuntimeError("sandbox-exec unavailable")
+    allowed_roots = [str(cwd), "/usr", "/bin", "/System", "/Library", "/Applications", "/opt"]
+    rules = [
+        "(version 1)",
+        '(import "system.sb")',
+        "(allow process*)",
+        '(deny file-read* (subpath "/Users"))',
+        '(deny file-read* (subpath "/tmp"))',
+        '(deny file-read* (subpath "/private/tmp"))',
+        '(deny file-read* (subpath "/private/var/folders"))',
+    ]
+    for root in allowed_roots:
+        rules.append(f'(allow file-read* (subpath "{root}"))')
+    rules.append(f'(allow file-write* (subpath "{cwd}"))')
+    profile = " ".join(rules)
+    return ["/usr/bin/sandbox-exec", "-p", profile, *command]
+
+
 def run_command(
     command: Sequence[str],
     *,
@@ -82,11 +108,19 @@ def run_command(
     output_limit: int = DEFAULT_OUTPUT_LIMIT,
     env: Optional[Mapping[str, str]] = None,
 ) -> CommandResult:
+    if not sandbox_available():
+        return CommandResult(
+            returncode=None,
+            timed_out=False,
+            stdout_excerpt="",
+            stderr_excerpt="",
+            warnings=["sandbox-exec unavailable; runtime execution disabled"],
+        )
     try:
         completed = subprocess.run(
-            list(command),
+            list(_sandboxed_command(command, cwd)),
             cwd=str(cwd),
-            env=dict(env) if env else workspace_env(),
+            env={**workspace_env(), **(dict(env) if env else {}), "TMPDIR": str(cwd), "TEMP": str(cwd), "TMP": str(cwd)},
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
@@ -120,7 +154,7 @@ def run_command_in_workspace(
     env: Optional[Mapping[str, str]] = None,
 ) -> CommandResult:
     workspace_path = ""
-    with TemporaryDirectory(prefix="faultlens-runner-") as tmp_dir:
+    with TemporaryDirectory(prefix="faultlens-runner-", dir=os.getcwd()) as tmp_dir:
         workspace = Path(tmp_dir)
         workspace_path = str(workspace)
         write_workspace_files(workspace, files)

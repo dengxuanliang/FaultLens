@@ -37,3 +37,19 @@ def test_detect_input_roles_raises_for_ambiguous_inputs() -> None:
                 fixtures / "ambiguous_input_b.jsonl",
             ]
         )
+
+
+def test_detect_input_roles_scans_past_outlier_first_record(tmp_path: Path) -> None:
+    left = tmp_path / "left.jsonl"
+    right = tmp_path / "right.jsonl"
+    left.write_text(
+        '{"junk":1}\n'
+        '{"id":1,"content":"c","canonical_solution":"x","completion":"y"}\n',
+        encoding="utf-8",
+    )
+    right.write_text('{"task_id":1,"accepted":false}\n', encoding="utf-8")
+
+    resolved = detect_input_roles([left, right])
+
+    assert resolved.inference_path == left
+    assert resolved.detected_roles[str(left)] == "inference"

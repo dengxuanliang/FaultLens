@@ -73,6 +73,7 @@ class AttributionResult:
     explanation: str = ""
     secondary_cause: Optional[str] = None
     slice_fields: Dict[str, Any] = field(default_factory=dict)
+    warnings: List[str] = field(default_factory=list)
 
 
 @dataclass

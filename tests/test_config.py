@@ -22,3 +22,12 @@ def test_load_settings_prefers_explicit_values(tmp_path):
 
     assert settings.model == "cli-model"
     assert settings.output_dir.name == "env-outputs"
+
+
+def test_load_settings_auto_loads_default_dotenv(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("FAULTLENS_MODEL=auto-model\n", encoding="utf-8")
+
+    settings = load_settings()
+
+    assert settings.model == "auto-model"

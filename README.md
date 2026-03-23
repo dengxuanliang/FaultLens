@@ -11,7 +11,7 @@ FaultLens is a deterministic-first CLI agent for paired code-evaluation JSONL an
 - runs deterministic analysis first:
   - language inference
   - syntax checks
-  - compile / test execution when supported
+  - compile / test execution when supported and sandboxed
   - harness/signature alignment checks
   - canonical/reference diff summaries
 - optionally calls an LLM for higher-level attribution
@@ -46,7 +46,7 @@ PYTHONPATH=src python3 -m faultlens.cli analyze \
 
 ### Optional LLM configuration
 
-Create a project-local `.env` file (do not commit it):
+Create a project-local `.env` file (auto-loaded from the current working directory):
 
 ```bash
 cp .env.example .env
@@ -60,7 +60,7 @@ Supported environment variables:
 - `FAULTLENS_REQUEST_TIMEOUT`
 - `FAULTLENS_EXECUTION_TIMEOUT`
 
-If LLM settings are absent, FaultLens still runs in deterministic-only mode.
+If LLM settings are absent or the endpoint is unavailable, FaultLens falls back to deterministic-only attribution and still writes reports.
 
 ## Output
 
@@ -81,9 +81,9 @@ V1 focuses on:
 
 Current machine-dependent behavior:
 - Python and C++ execution run when toolchains are available
-- Java and Go gracefully degrade when toolchains are unavailable
-- execution uses a temp workspace, sanitized environment, timeouts, and cleanup
-- this is **not** a full OS sandbox
+- Java and Go gracefully degrade when toolchains or runtime support are unavailable
+- runtime execution requires macOS `sandbox-exec`; when unavailable, execution is disabled and FaultLens degrades to static analysis for safety
+- execution uses a temporary workspace, sanitized environment, timeouts, truncated output capture, and cleanup
 
 ## Tests
 

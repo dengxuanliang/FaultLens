@@ -98,6 +98,8 @@ def analyze_cases_deterministically(cases: List[Dict[str, Any]], execution_timeo
                     signals.append("compile_error")
                 if runner_result.test_status == "failed":
                     signals.append("test_failure")
+                    if not runner_result.stderr_excerpt or "assert" in runner_result.stderr_excerpt.lower():
+                        signals.append("logic_mismatch")
                 if runner_result.test_status == "timeout" or runner_result.timed_out:
                     signals.append("timeout")
                 if runner_result.test_status == "failed" and runner_result.stderr_excerpt and "assert" not in runner_result.stderr_excerpt.lower():

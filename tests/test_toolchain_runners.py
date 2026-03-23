@@ -85,3 +85,25 @@ def test_go_runner_graceful_degraded_mode_when_unavailable():
         assert result.available is False
         assert result.compile_status == "unavailable"
         assert result.test_status == "unavailable"
+
+
+def test_java_runner_accepts_non_main_public_class_name():
+    runner = build_runner_registry().for_language("java")
+    result = runner.run(
+        solution_code="public class Solution { static int solve(int x){ return x+1; } }\n",
+        test_code="public class TestMain { public static void main(String[] args){ if(Solution.solve(1)!=2) throw new RuntimeException(); } }\n",
+        timeout_seconds=10,
+    )
+
+    java_ready = bool(shutil.which("javac")) and bool(shutil.which("java"))
+    java_ready = java_ready and _command_works(["javac", "-version"]) and _command_works(["java", "-version"])
+    if java_ready:
+        assert result.available is True
+        assert result.compile_status in {"passed", "failed"}
+    else:
+        assert result.available is False
+
+
+def test_java_runner_detects_public_solution_class_name():
+    runner = build_runner_registry().for_language("java")
+    assert runner._solution_class_name("public class Solution { }") == "Solution"

@@ -47,6 +47,7 @@ def build_final_case_result(
             explanation=f"Case did not enter attribution because status is {case.case_status}.",
             secondary_cause=None,
             slice_fields=dict(case.metadata.get("slice_fields", {})),
+            warnings=list(case.warnings) + list(findings.warnings),
         )
 
     root_cause = _normalize_root_cause(findings.root_cause_hint)
@@ -93,4 +94,5 @@ def build_final_case_result(
         explanation=explanation,
         secondary_cause=secondary_cause,
         slice_fields=dict(case.metadata.get("slice_fields", {})),
+        warnings=list(case.warnings) + list(findings.warnings),
     )

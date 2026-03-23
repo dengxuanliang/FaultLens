@@ -5,6 +5,7 @@ from pathlib import Path
 from faultlens.deterministic.runners.base import (
     DEFAULT_OUTPUT_LIMIT,
     run_command_in_workspace,
+    sandbox_available,
     workspace_env,
 )
 
@@ -54,3 +55,18 @@ def test_run_command_times_out():
     assert result.timed_out is True
     assert result.returncode is None
     assert result.workspace_removed is True
+
+
+def test_run_command_confines_file_access_when_sandbox_available(tmp_path: Path):
+    if not sandbox_available():
+        return
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret", encoding="utf-8")
+    command = [
+        "python3",
+        "-c",
+        f"from pathlib import Path; print(Path({outside.as_posix()!r}).read_text())",
+    ]
+    result = run_command_in_workspace(command=command, files={}, timeout_seconds=5, output_limit=128)
+
+    assert result.returncode != 0

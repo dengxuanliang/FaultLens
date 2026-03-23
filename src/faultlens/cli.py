@@ -14,7 +14,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     analyze = subparsers.add_parser("analyze")
     analyze.add_argument("--input", nargs=2, required=True)
-    analyze.add_argument("--output-dir", default="outputs")
+    analyze.add_argument("--output-dir")
     analyze.add_argument("--case-id")
     analyze.add_argument("--env-file")
     analyze.add_argument("--model")
@@ -39,12 +39,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         api_key=args.api_key,
         base_url=args.base_url,
         model=args.model,
-        output_dir=Path(args.output_dir),
+        output_dir=Path(args.output_dir) if args.output_dir else None,
     )
     run_analysis(
         input_paths=[Path(path) for path in args.input],
         settings=settings,
-        output_dir=Path(args.output_dir),
+        output_dir=settings.output_dir,
         case_id=args.case_id,
     )
     return 0

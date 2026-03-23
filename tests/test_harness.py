@@ -41,3 +41,41 @@ def test_controlled_signal_vocabulary_contains_required_items() -> None:
         "suspicious_eval_mismatch",
     }
     assert required.issubset(CONTROLLED_SIGNALS)
+
+
+def test_go_harness_alignment_accepts_function_based_solution():
+    result = analyze_harness_alignment(
+        test_code="package main\nimport \"testing\"\nfunc TestSolve(t *testing.T){ if solve(1) != 2 { t.Fatal(\"bad\") } }",
+        completion_code="package main\nfunc solve(x int) int { return x + 1 }",
+        language="go",
+        accepted=False,
+        pass_metrics={"passed_at_1": 0},
+    )
+
+    assert result["entrypoint_check_status"] == "ok"
+    assert "entrypoint_mismatch" not in result["signals"]
+
+
+def test_java_harness_alignment_accepts_testmain_invocation():
+    result = analyze_harness_alignment(
+        test_code="public class TestMain { public static void main(String[] args){ if(Solution.solve(1)!=2) throw new RuntimeException(); } }",
+        completion_code="public class Solution { static int solve(int x){ return x + 1; } }",
+        language="java",
+        accepted=False,
+        pass_metrics={"passed_at_1": 0},
+    )
+
+    assert result["entrypoint_check_status"] == "ok"
+    assert "entrypoint_mismatch" not in result["signals"]
+
+
+def test_harness_alignment_does_not_emit_logic_mismatch_without_execution():
+    result = analyze_harness_alignment(
+        test_code="package main\nimport \"testing\"\nfunc TestSolve(t *testing.T){ if solve(1) != 2 { t.Fatal(\"bad\") } }",
+        completion_code="package main\nfunc solve(x int) int { return x + 1 }",
+        language="go",
+        accepted=False,
+        pass_metrics={"passed_at_1": 0},
+    )
+
+    assert "logic_mismatch" not in result["signals"]

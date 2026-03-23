@@ -46,9 +46,13 @@ def test_render_reports_contain_required_sections():
     assert "# Slice Analysis" in report
     assert "# Representative Exemplars" in report
     assert "# Review Queue" in report
+    assert "# Input Warnings" in report
+    assert "# LLM Warnings" in report
 
     assert "# Case 1" in case_report
     assert "## Language" in case_report
+    assert "## Completion Code" in case_report
     assert "## Parse / Compile / Test" in case_report
     assert "## Root Cause" in case_report
+    assert "## Warnings" in case_report
     assert "## Explanation" in case_report

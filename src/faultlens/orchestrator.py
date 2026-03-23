@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict
 import json
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, Optional
 
 from faultlens.attribution.engine import build_final_case_result
 from faultlens.config import Settings
@@ -33,17 +33,24 @@ def run_analysis(
 
     client = LLMClient(settings)
     results = []
+    llm_warnings = []
     for case in analyzed:
         record = _to_case_record(case)
         findings = DeterministicFindings(
             signals=list(case.get("deterministic_signals", [])),
             findings=dict(case.get("deterministic_findings", {})),
-            warnings=list(case.get("failure_gate_warnings", [])),
+            warnings=list(case.get("failure_gate_warnings", [])) + list(case.get("deterministic_findings", {}).get("runner_warnings", [])),
             root_cause_hint=case.get("deterministic_root_cause_hint"),
         )
         llm_result = None
         if record.eligible_for_llm and client.enabled:
-            llm_result = client.complete_json(build_attribution_messages(case))
+            try:
+                llm_result = client.complete_json(build_attribution_messages(case))
+            except Exception as exc:  # noqa: BLE001
+                llm_warnings.append(f"llm unavailable: {exc}")
+                llm_result = None
+            if client.last_warning:
+                llm_warnings.append(client.last_warning)
         results.append(build_final_case_result(record, findings, llm_result))
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -53,8 +60,26 @@ def run_analysis(
     exemplars_dir.mkdir(parents=True, exist_ok=True)
 
     summary = summarize_cases(results)
-    (output_dir / "analysis_report.md").write_text(render_analysis_report(summary, results), encoding="utf-8")
+    run_context = {
+        "input_files": [str(path) for path in input_paths],
+        "role_detection": resolved.detected_roles,
+        "join_stats": {
+            "joined": sum(1 for case in analyzed if case.get("join_status") == "ok"),
+            "join_issue": sum(1 for case in analyzed if case.get("case_status") == "join_issue"),
+        },
+        "case_counts": {
+            "passed": sum(1 for result in results if result.case_status == "passed"),
+            "attributable_failure": sum(1 for result in results if result.case_status == "attributable_failure"),
+            "data_issue": sum(1 for result in results if result.case_status == "data_issue"),
+            "join_issue": sum(1 for result in results if result.case_status == "join_issue"),
+        },
+        "model_summary": settings.model if client.enabled else "deterministic-only",
+        "input_warnings": resolved.warnings,
+        "llm_warnings": llm_warnings,
+    }
+    (output_dir / "analysis_report.md").write_text(render_analysis_report(summary, results, run_context), encoding="utf-8")
     (output_dir / "summary.json").write_text(json.dumps(asdict(summary), ensure_ascii=False, indent=2), encoding="utf-8")
+    (output_dir / "run_metadata.json").write_text(json.dumps(run_context, ensure_ascii=False, indent=2), encoding="utf-8")
     (output_dir / "case_analysis.jsonl").write_text(
         "\n".join(json.dumps(asdict(result), ensure_ascii=False) for result in results) + "\n",
         encoding="utf-8",
@@ -74,7 +99,7 @@ def run_analysis(
             slug = result.root_cause.replace("/", "-")
             (exemplars_dir / f"{slug}-{result.case_id}.md").write_text(text, encoding="utf-8")
 
-    return {"resolved": resolved, "results": results, "summary": summary, "output_dir": output_dir}
+    return {"resolved": resolved, "results": results, "summary": summary, "output_dir": output_dir, "llm_warnings": llm_warnings}
 
 
 def _to_case_record(case: Dict[str, Any]) -> CaseRecord:

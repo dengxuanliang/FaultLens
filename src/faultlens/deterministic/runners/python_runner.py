@@ -4,11 +4,13 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import ast
 import sys
+import os
 
 from faultlens.deterministic.runners.base import (
     BaseRunner,
     RunnerResult,
     run_command,
+    sandbox_available,
     workspace_env,
     write_workspace_files,
 )
@@ -18,6 +20,18 @@ class PythonRunner(BaseRunner):
     language = "python"
 
     def run(self, solution_code: str, test_code: str, timeout_seconds: int) -> RunnerResult:
+        if not sandbox_available():
+            return RunnerResult(
+                language=self.language,
+                available=False,
+                compile_status="unavailable",
+                test_status="unavailable",
+                timed_out=False,
+                exit_code=None,
+                stdout_excerpt="",
+                stderr_excerpt="",
+                warnings=["sandbox-exec unavailable; runtime execution disabled"],
+            )
         try:
             ast.parse(solution_code)
         except SyntaxError as exc:
@@ -35,7 +49,7 @@ class PythonRunner(BaseRunner):
             )
 
         combined_code = f"{solution_code.rstrip()}\n\n{test_code.rstrip()}\n"
-        with TemporaryDirectory(prefix="faultlens-python-runner-") as tmp_dir:
+        with TemporaryDirectory(prefix="faultlens-python-runner-", dir=os.getcwd()) as tmp_dir:
             write_workspace_files(
                 workspace=Path(tmp_dir),
                 files={"main.py": combined_code},
@@ -47,6 +61,18 @@ class PythonRunner(BaseRunner):
                 env=workspace_env(),
             )
 
+        if result.warnings and result.returncode is None and not result.timed_out:
+            return RunnerResult(
+                language=self.language,
+                available=False,
+                compile_status="unavailable",
+                test_status="unavailable",
+                timed_out=False,
+                exit_code=None,
+                stdout_excerpt=result.stdout_excerpt,
+                stderr_excerpt=result.stderr_excerpt,
+                warnings=result.warnings,
+            )
         if result.timed_out:
             return RunnerResult(
                 language=self.language,

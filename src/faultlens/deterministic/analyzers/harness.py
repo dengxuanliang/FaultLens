@@ -68,25 +68,43 @@ def analyze_harness_alignment(
             api_check_status = "mismatch"
             signals.extend(["signature_mismatch", "entrypoint_mismatch", "api_mismatch"])
     elif (language or "").lower() == "go":
-        has_entry = bool(_GO_ENTRY_RE.search(completion_code or ""))
-        entrypoint_check_status = "ok" if has_entry else "mismatch"
-        signature_check_status = "ok" if has_entry else "mismatch"
-        api_check_status = "ok" if has_entry else "mismatch"
-        if not has_entry:
-            signals.append("entrypoint_mismatch")
+        expected = _expected_symbol_from_test(test_code or "")
+        defined = set(re.findall(r"\bfunc\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", completion_code or ""))
+        if expected is None:
+            has_entry = bool(_GO_ENTRY_RE.search(completion_code or ""))
+            entrypoint_check_status = "ok" if has_entry else "unknown"
+            signature_check_status = "ok" if has_entry else "unknown"
+            api_check_status = "ok" if has_entry else "unknown"
+        elif expected in defined:
+            entrypoint_check_status = "ok"
+            signature_check_status = "ok"
+            api_check_status = "ok"
+        else:
+            entrypoint_check_status = "mismatch"
+            signature_check_status = "mismatch"
+            api_check_status = "mismatch"
+            signals.extend(["signature_mismatch", "entrypoint_mismatch", "api_mismatch"])
     elif (language or "").lower() == "java":
-        has_entry = bool(_JAVA_ENTRY_RE.search(completion_code or ""))
-        entrypoint_check_status = "ok" if has_entry else "mismatch"
-        signature_check_status = "ok" if has_entry else "mismatch"
-        api_check_status = "ok" if has_entry else "mismatch"
-        if not has_entry:
-            signals.append("entrypoint_mismatch")
+        expected = _expected_java_symbol(test_code or "")
+        defined_methods = set(re.findall(r"\b(?:public\s+)?(?:static\s+)?(?:final\s+)?[A-Za-z_][A-Za-z0-9_<>\[\]]*\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", completion_code or ""))
+        if expected is None:
+            has_entry = bool(_JAVA_ENTRY_RE.search(completion_code or ""))
+            entrypoint_check_status = "ok" if has_entry else "unknown"
+            signature_check_status = "ok" if has_entry else "unknown"
+            api_check_status = "ok" if has_entry else "unknown"
+        elif expected in defined_methods:
+            entrypoint_check_status = "ok"
+            signature_check_status = "ok"
+            api_check_status = "ok"
+        else:
+            entrypoint_check_status = "mismatch"
+            signature_check_status = "mismatch"
+            api_check_status = "mismatch"
+            signals.extend(["signature_mismatch", "entrypoint_mismatch", "api_mismatch"])
 
     if _has_suspicious_eval_mismatch(accepted=accepted, pass_metrics=pass_metrics):
         signals.append("suspicious_eval_mismatch")
 
-    if accepted is False and not signals and parse_status == "parsed":
-        signals.append("logic_mismatch")
 
     normalized_signals = normalize_signals(signals)
     summary = (
@@ -105,10 +123,21 @@ def analyze_harness_alignment(
 
 
 def _expected_symbol_from_test(test_code: str) -> Optional[str]:
+    excluded = {"assert", "print", "len", "range", "if", "for", "while", "switch", "return", "func", "def"}
     for name in _CALL_RE.findall(test_code):
-        if name not in {"assert", "print", "len", "range"}:
-            return name
+        if name in excluded:
+            continue
+        if re.search(rf"\b(?:def|func)\s+{name}\s*\(", test_code):
+            continue
+        return name
     return None
+
+
+def _expected_java_symbol(test_code: str) -> Optional[str]:
+    match = re.search(r"\.([A-Za-z_][A-Za-z0-9_]*)\s*\(", test_code)
+    if match:
+        return match.group(1)
+    return _expected_symbol_from_test(test_code)
 
 
 def _has_suspicious_eval_mismatch(

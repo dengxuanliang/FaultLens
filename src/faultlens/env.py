@@ -6,9 +6,7 @@ import os
 
 
 def load_dotenv(env_path: Optional[Path]) -> Dict[str, str]:
-    if env_path is None:
-        return {}
-    path = Path(env_path)
+    path = Path(env_path) if env_path is not None else Path.cwd() / ".env"
     if not path.exists():
         return {}
     values: Dict[str, str] = {}
