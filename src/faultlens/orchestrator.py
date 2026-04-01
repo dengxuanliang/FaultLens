@@ -34,6 +34,17 @@ def run_analysis(
     client = LLMClient(settings)
     results = []
     llm_warnings = []
+    llm_response_stats: Dict[str, Any] = {
+        "attempted": 0,
+        "strict_json": 0,
+        "adaptive_parse": 0,
+        "salvaged": 0,
+        "skipped_invalid": 0,
+        "nonconforming": 0,
+        "nonconforming_percentage": 0.0,
+        "nonconforming_reasons": {},
+        "request_errors": 0,
+    }
     for case in analyzed:
         record = _to_case_record(case)
         findings = DeterministicFindings(
@@ -44,14 +55,40 @@ def run_analysis(
         )
         llm_result = None
         if record.eligible_for_llm and client.enabled:
+            llm_response_stats["attempted"] += 1
             try:
                 llm_result = client.complete_json(build_attribution_messages(case))
             except Exception as exc:  # noqa: BLE001
                 llm_warnings.append(f"llm unavailable: {exc}")
+                llm_response_stats["request_errors"] += 1
                 llm_result = None
+            info = getattr(client, "last_completion_info", {}) or {}
+            status = info.get("status")
+            reason = info.get("invalid_reason")
+            if status == "strict_json":
+                llm_response_stats["strict_json"] += 1
+            elif status == "adaptive_parse":
+                llm_response_stats["adaptive_parse"] += 1
+                llm_response_stats["nonconforming"] += 1
+                _increment_reason(llm_response_stats["nonconforming_reasons"], reason or "adaptive_parse")
+            elif status == "salvaged":
+                llm_response_stats["salvaged"] += 1
+                llm_response_stats["nonconforming"] += 1
+                _increment_reason(llm_response_stats["nonconforming_reasons"], reason or "salvaged")
+            elif status == "invalid":
+                llm_response_stats["skipped_invalid"] += 1
+                llm_response_stats["nonconforming"] += 1
+                _increment_reason(llm_response_stats["nonconforming_reasons"], reason or "invalid")
+            elif status == "request_error":
+                llm_response_stats["request_errors"] += 1
             if client.last_warning:
                 llm_warnings.append(client.last_warning)
         results.append(build_final_case_result(record, findings, llm_result))
+
+    if llm_response_stats["attempted"]:
+        llm_response_stats["nonconforming_percentage"] = round(
+            llm_response_stats["nonconforming"] / llm_response_stats["attempted"] * 100, 2
+        )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     cases_dir = output_dir / "cases"
@@ -76,6 +113,7 @@ def run_analysis(
         "model_summary": settings.model if client.enabled else "deterministic-only",
         "input_warnings": resolved.warnings,
         "llm_warnings": llm_warnings,
+        "llm_response_stats": llm_response_stats,
     }
     (output_dir / "analysis_report.md").write_text(render_analysis_report(summary, results, run_context), encoding="utf-8")
     (output_dir / "summary.json").write_text(json.dumps(asdict(summary), ensure_ascii=False, indent=2), encoding="utf-8")
@@ -99,7 +137,20 @@ def run_analysis(
             slug = result.root_cause.replace("/", "-")
             (exemplars_dir / f"{slug}-{result.case_id}.md").write_text(text, encoding="utf-8")
 
-    return {"resolved": resolved, "results": results, "summary": summary, "output_dir": output_dir, "llm_warnings": llm_warnings}
+    return {
+        "resolved": resolved,
+        "results": results,
+        "summary": summary,
+        "output_dir": output_dir,
+        "llm_warnings": llm_warnings,
+        "llm_response_stats": llm_response_stats,
+    }
+
+
+
+def _increment_reason(counter: Dict[str, int], reason: str) -> None:
+    counter[reason] = counter.get(reason, 0) + 1
+
 
 
 def _to_case_record(case: Dict[str, Any]) -> CaseRecord:

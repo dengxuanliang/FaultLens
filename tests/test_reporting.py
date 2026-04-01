@@ -39,20 +39,21 @@ def test_render_reports_contain_required_sections():
     report = render_analysis_report(summary, [result])
     case_report = render_case_report(result)
 
-    assert "# Run Summary" in report
-    assert "# Deterministic Analysis Summary" in report
-    assert "# LLM Root Cause Distribution" in report
-    assert "# Cross Analysis" in report
-    assert "# Slice Analysis" in report
-    assert "# Representative Exemplars" in report
-    assert "# Review Queue" in report
-    assert "# Input Warnings" in report
-    assert "# LLM Warnings" in report
+    assert "# 运行摘要" in report
+    assert "# 确定性分析摘要" in report
+    assert "# LLM 根因分布" in report
+    assert "# 交叉分析" in report
+    assert "# 切片分析" in report
+    assert "# 代表性案例" in report
+    assert "# 待人工复核" in report
+    assert "# 输入警告" in report
+    assert "# LLM 警告" in report
 
-    assert "# Case 1" in case_report
-    assert "## Language" in case_report
-    assert "## Completion Code" in case_report
-    assert "## Parse / Compile / Test" in case_report
-    assert "## Root Cause" in case_report
-    assert "## Warnings" in case_report
-    assert "## Explanation" in case_report
+    assert "# 案例 1" in case_report
+    assert "## 语言" in case_report
+    assert "## 生成代码" in case_report
+    assert "## 解析 / 编译 / 测试" in case_report
+    assert "## 根因" in case_report
+    assert "## 警告" in case_report
+    assert "## 解释" in case_report
+    assert "logic mismatch" in case_report
