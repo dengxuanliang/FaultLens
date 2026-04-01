@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+import json
+import sqlite3
+from tempfile import NamedTemporaryFile
+from typing import Any, Dict, Iterator, List, Optional
 
-from faultlens.ingest.jsonl import JsonlRecord, load_jsonl
+from faultlens.ingest.jsonl import JsonlRecord, iter_jsonl_records
+
 
 
 def _stringify(value: Any) -> Optional[str]:
@@ -13,33 +16,14 @@ def _stringify(value: Any) -> Optional[str]:
     return str(value)
 
 
-def _index_by_key(
-    records: List[JsonlRecord], key_name: str, side: str
-) -> tuple[Dict[str, JsonlRecord], Dict[str, int], List[str]]:
-    index: Dict[str, JsonlRecord] = {}
-    duplicate_counts: Dict[str, int] = {}
-    warnings: List[str] = []
-    for record in records:
-        key = _stringify(record.data.get(key_name))
-        if key is None:
-            warnings.append(f"{side} missing {key_name} at line {record.line_number}")
-            continue
-        if key in index:
-            duplicate_counts[key] = duplicate_counts.get(key, 1) + 1
-            warnings.append(f"duplicate {side} key {key}")
-            continue
-        index[key] = record
-    return index, duplicate_counts, warnings
-
 
 def _extract_metadata_tags(result_record: Dict[str, Any]) -> Dict[str, Any]:
     keys = ["natural_language", "programming_language", "category", "difficulty"]
     return {key: result_record.get(key) for key in keys if result_record.get(key) is not None}
 
 
-def _derive_slice_fields(
-    inference_labels: Dict[str, Any], results_tags: Dict[str, Any]
-) -> tuple[Dict[str, Any], List[str]]:
+
+def _derive_slice_fields(inference_labels: Dict[str, Any], results_tags: Dict[str, Any]) -> tuple[Dict[str, Any], List[str]]:
     warnings: List[str] = []
     slice_fields: Dict[str, Any] = {}
 
@@ -62,6 +46,7 @@ def _derive_slice_fields(
         if inf is not None and res is not None and inf != res:
             warnings.append(f"metadata conflict on {key}: inference={inf}, results={res}")
     return slice_fields, warnings
+
 
 
 def _build_join_issue_case(case_id: str, reason: str) -> Dict[str, Any]:
@@ -88,9 +73,8 @@ def _build_join_issue_case(case_id: str, reason: str) -> Dict[str, Any]:
     }
 
 
-def _build_joined_case(
-    case_id: str, inference_record: JsonlRecord, results_record: JsonlRecord
-) -> Dict[str, Any]:
+
+def _build_joined_case(case_id: str, inference_record: JsonlRecord, results_record: JsonlRecord) -> Dict[str, Any]:
     inference_data = inference_record.data
     results_data = results_record.data
     inference_labels = inference_data.get("labels") or {}
@@ -144,34 +128,70 @@ def _build_joined_case(
     }
 
 
+
 def join_records(inference_path: Path, results_path: Path) -> List[Dict[str, Any]]:
-    inference_data = load_jsonl(Path(inference_path))
-    results_data = load_jsonl(Path(results_path))
+    return list(join_records_iter(inference_path, results_path))
 
-    inference_index, inference_dups, inference_warnings = _index_by_key(
-        inference_data.records, "id", "inference"
-    )
-    results_index, results_dups, results_warnings = _index_by_key(
-        results_data.records, "task_id", "results"
-    )
-    keys = set(inference_index.keys()) | set(results_index.keys())
 
-    joined: List[Dict[str, Any]] = []
-    for key in sorted(keys, key=lambda value: (len(value), value)):
-        inf = inference_index.get(key)
-        res = results_index.get(key)
-        if inf is None or res is None:
-            joined.append(_build_join_issue_case(key, f"missing pair for key {key}"))
+
+def join_records_iter(inference_path: Path, results_path: Path) -> Iterator[Dict[str, Any]]:
+    with NamedTemporaryFile(prefix="faultlens-join-", suffix=".sqlite3") as handle:
+        connection = sqlite3.connect(handle.name)
+        try:
+            connection.execute("CREATE TABLE records (side TEXT NOT NULL, join_key TEXT NOT NULL, line_number INTEGER NOT NULL, payload_json TEXT NOT NULL, PRIMARY KEY(side, join_key))")
+            all_loader_warnings: List[str] = []
+            inference_dups = _stream_into_index(connection, Path(inference_path), "inference", "id", all_loader_warnings)
+            results_dups = _stream_into_index(connection, Path(results_path), "results", "task_id", all_loader_warnings)
+
+            query = """
+                SELECT keys.join_key,
+                       inf.line_number, inf.payload_json,
+                       res.line_number, res.payload_json
+                FROM (
+                    SELECT join_key FROM records WHERE side = 'inference'
+                    UNION
+                    SELECT join_key FROM records WHERE side = 'results'
+                ) AS keys
+                LEFT JOIN records AS inf ON inf.side = 'inference' AND inf.join_key = keys.join_key
+                LEFT JOIN records AS res ON res.side = 'results' AND res.join_key = keys.join_key
+                ORDER BY LENGTH(keys.join_key), keys.join_key
+            """
+            for join_key, inf_line, inf_payload, res_line, res_payload in connection.execute(query):
+                if inf_payload is None or res_payload is None:
+                    case = _build_join_issue_case(str(join_key), f"missing pair for key {join_key}")
+                elif str(join_key) in inference_dups or str(join_key) in results_dups:
+                    case = _build_join_issue_case(str(join_key), f"duplicate join key {join_key}")
+                else:
+                    case = _build_joined_case(
+                        str(join_key),
+                        JsonlRecord(line_number=int(inf_line), data=json.loads(inf_payload)),
+                        JsonlRecord(line_number=int(res_line), data=json.loads(res_payload)),
+                    )
+                if all_loader_warnings:
+                    case["normalization"]["warnings"].extend(all_loader_warnings)
+                yield case
+        finally:
+            connection.close()
+
+
+
+def _stream_into_index(connection: sqlite3.Connection, path: Path, side: str, key_name: str, warnings: List[str]) -> set[str]:
+    duplicates: set[str] = set()
+    for item in iter_jsonl_records(path):
+        if isinstance(item, str):
+            warnings.append(item)
             continue
-        if key in inference_dups or key in results_dups:
-            joined.append(_build_join_issue_case(key, f"duplicate join key {key}"))
+        key = _stringify(item.data.get(key_name))
+        if key is None:
+            warnings.append(f"{side} missing {key_name} at line {item.line_number}")
             continue
-        joined.append(_build_joined_case(key, inf, res))
-
-    # Keep bad-line warnings visible by attaching them to each case.
-    all_loader_warnings = inference_data.warnings + results_data.warnings
-    all_loader_warnings += inference_warnings + results_warnings
-    if all_loader_warnings:
-        for case in joined:
-            case["normalization"]["warnings"].extend(all_loader_warnings)
-    return joined
+        try:
+            connection.execute(
+                "INSERT INTO records(side, join_key, line_number, payload_json) VALUES (?, ?, ?, ?)",
+                (side, key, item.line_number, json.dumps(item.data, ensure_ascii=False)),
+            )
+        except sqlite3.IntegrityError:
+            duplicates.add(key)
+            warnings.append(f"duplicate {side} key {key}")
+    connection.commit()
+    return duplicates

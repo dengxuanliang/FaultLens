@@ -6,35 +6,47 @@ from typing import Iterable
 from faultlens.models import AttributionResult, SummaryReport
 
 
-def summarize_cases(results: Iterable[AttributionResult]) -> SummaryReport:
-    results = list(results)
-    root_counter = Counter()
-    signal_counter = Counter()
-    review_queue = []
-    exemplars = defaultdict(list)
-    cross = defaultdict(Counter)
-    slices = defaultdict(lambda: defaultdict(Counter))
+class SummaryAccumulator:
+    def __init__(self) -> None:
+        self.total_cases = 0
+        self.root_counter = Counter()
+        self.signal_counter = Counter()
+        self.review_queue: list[str] = []
+        self.exemplars = defaultdict(list)
+        self.cross = defaultdict(Counter)
+        self.slices = defaultdict(lambda: defaultdict(Counter))
 
-    for result in results:
+    def add(self, result: AttributionResult) -> None:
+        self.total_cases += 1
         if result.root_cause:
-            root_counter[result.root_cause] += 1
-            exemplars[result.root_cause].append(result.case_id)
+            self.root_counter[result.root_cause] += 1
+            if len(self.exemplars[result.root_cause]) < 3:
+                self.exemplars[result.root_cause].append(result.case_id)
         for signal in result.deterministic_signals:
-            signal_counter[signal] += 1
+            self.signal_counter[signal] += 1
             if result.root_cause:
-                cross[signal][result.root_cause] += 1
+                self.cross[signal][result.root_cause] += 1
         if result.needs_human_review:
-            review_queue.append(result.case_id)
+            self.review_queue.append(result.case_id)
         for key, value in result.slice_fields.items():
             if value is not None and result.root_cause:
-                slices[key][str(value)][result.root_cause] += 1
+                self.slices[key][str(value)][result.root_cause] += 1
 
-    return SummaryReport(
-        total_cases=len(results),
-        root_cause_counts=dict(root_counter),
-        deterministic_signal_counts=dict(signal_counter),
-        review_queue=review_queue,
-        slices={outer: {inner: dict(counts) for inner, counts in inner_map.items()} for outer, inner_map in slices.items()},
-        exemplars={root: case_ids[:3] for root, case_ids in exemplars.items()},
-        cross_analysis={signal: dict(counter) for signal, counter in cross.items()},
-    )
+    def to_summary(self) -> SummaryReport:
+        return SummaryReport(
+            total_cases=self.total_cases,
+            root_cause_counts=dict(self.root_counter),
+            deterministic_signal_counts=dict(self.signal_counter),
+            review_queue=list(self.review_queue),
+            slices={outer: {inner: dict(counts) for inner, counts in inner_map.items()} for outer, inner_map in self.slices.items()},
+            exemplars={root: case_ids[:] for root, case_ids in self.exemplars.items()},
+            cross_analysis={signal: dict(counter) for signal, counter in self.cross.items()},
+        )
+
+
+
+def summarize_cases(results: Iterable[AttributionResult]) -> SummaryReport:
+    accumulator = SummaryAccumulator()
+    for result in results:
+        accumulator.add(result)
+    return accumulator.to_summary()

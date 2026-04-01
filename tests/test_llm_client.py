@@ -77,6 +77,7 @@ def test_complete_json_parses_fenced_json_response(monkeypatch):
 
     assert result["root_cause"] == "solution_incorrect"
     assert client.last_completion_info["status"] == "adaptive_parse"
+    assert client.last_completion_info["raw_response_excerpt"]
 
 
 
@@ -165,3 +166,4 @@ int solve(int x) {
     assert "code_only_response" in result["llm_signals"]
     assert client.last_completion_info["status"] == "salvaged"
     assert client.last_completion_info["invalid_reason"] == "code_only_response"
+    assert "int solve" in client.last_completion_info["raw_response_excerpt"]

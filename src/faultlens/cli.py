@@ -8,6 +8,7 @@ from faultlens.config import load_settings
 from faultlens.orchestrator import run_analysis
 
 
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="faultlens")
     subparsers = parser.add_subparsers(dest="command")
@@ -20,7 +21,11 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--model")
     analyze.add_argument("--base-url")
     analyze.add_argument("--api-key")
+    analyze.add_argument("--llm-max-workers", type=int)
+    analyze.add_argument("--resume", action="store_true")
+    analyze.add_argument("--disable-checkpoints", action="store_true")
     return parser
+
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -40,6 +45,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         base_url=args.base_url,
         model=args.model,
         output_dir=Path(args.output_dir) if args.output_dir else None,
+        llm_max_workers=args.llm_max_workers,
+        resume=True if args.resume else None,
+        enable_checkpoints=False if args.disable_checkpoints else None,
     )
     run_analysis(
         input_paths=[Path(path) for path in args.input],

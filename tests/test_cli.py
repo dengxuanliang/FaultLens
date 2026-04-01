@@ -19,3 +19,22 @@ def test_cli_auto_loads_dotenv_output_dir(tmp_path, fixtures_dir, monkeypatch):
 
     assert exit_code == 0
     assert (tmp_path / "env-outs" / "analysis_report.md").exists()
+
+
+def test_cli_accepts_scaling_flags(tmp_path, fixtures_dir):
+    output_dir = tmp_path / "outs"
+
+    exit_code = main([
+        "analyze",
+        "--input",
+        str(fixtures_dir / "inference_sample.jsonl"),
+        str(fixtures_dir / "results_sample.jsonl"),
+        "--output-dir",
+        str(output_dir),
+        "--llm-max-workers",
+        "2",
+        "--resume",
+    ])
+
+    assert exit_code == 0
+    assert (output_dir / "analysis_report.md").exists()

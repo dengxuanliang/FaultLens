@@ -20,7 +20,7 @@ class LLMClient:
 
     def complete_json(self, messages: list[dict[str, str]]) -> Optional[Dict[str, Any]]:
         self.last_warning = None
-        self.last_completion_info = {"status": "disabled"}
+        self.last_completion_info = {"status": "disabled", "raw_response_excerpt": None}
         if not self.enabled:
             return None
 
@@ -45,10 +45,12 @@ class LLMClient:
             with request.urlopen(req, timeout=self.settings.request_timeout) as resp:  # noqa: S310
                 body = json.loads(resp.read().decode("utf-8"))
             content = _normalize_content(body.get("choices", [{}])[0].get("message", {}).get("content"))
+            excerpt = _excerpt(content)
             parsed = parse_attribution_response(content)
             self.last_completion_info = {
                 "status": parsed.status,
                 "invalid_reason": parsed.invalid_reason,
+                "raw_response_excerpt": excerpt,
             }
             if parsed.status == "strict_json":
                 return parsed.payload
@@ -59,7 +61,7 @@ class LLMClient:
             return None
         except (error.URLError, error.HTTPError, TimeoutError, json.JSONDecodeError, OSError, ValueError) as exc:
             self.last_warning = f"llm unavailable: {exc}"
-            self.last_completion_info = {"status": "request_error", "error_type": type(exc).__name__}
+            self.last_completion_info = {"status": "request_error", "error_type": type(exc).__name__, "raw_response_excerpt": None}
             return None
 
 
@@ -76,3 +78,9 @@ def _normalize_content(content: Any) -> str:
                 parts.append(str(part.get("text", "")))
         return "".join(parts)
     return ""
+
+
+
+def _excerpt(content: str, limit: int = 240) -> str:
+    stripped = (content or "").strip()
+    return stripped[:limit]

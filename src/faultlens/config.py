@@ -15,6 +15,10 @@ class Settings:
     output_dir: Path
     request_timeout: int
     execution_timeout: int
+    llm_max_workers: int = 4
+    resume: bool = False
+    enable_checkpoints: bool = True
+
 
 
 def load_settings(
@@ -26,6 +30,9 @@ def load_settings(
     output_dir: Optional[Path] = None,
     request_timeout: Optional[int] = None,
     execution_timeout: Optional[int] = None,
+    llm_max_workers: Optional[int] = None,
+    resume: Optional[bool] = None,
+    enable_checkpoints: Optional[bool] = None,
 ) -> Settings:
     env_values = merge_env(load_dotenv(env_path))
     return Settings(
@@ -35,4 +42,16 @@ def load_settings(
         output_dir=Path(output_dir or env_values.get("FAULTLENS_OUTPUT_DIR", "outputs")),
         request_timeout=int(request_timeout or env_values.get("FAULTLENS_REQUEST_TIMEOUT", 60)),
         execution_timeout=int(execution_timeout or env_values.get("FAULTLENS_EXECUTION_TIMEOUT", 10)),
+        llm_max_workers=max(1, int(llm_max_workers or env_values.get("FAULTLENS_LLM_MAX_WORKERS", 4))),
+        resume=_parse_bool(resume, env_values.get("FAULTLENS_RESUME"), default=False),
+        enable_checkpoints=_parse_bool(enable_checkpoints, env_values.get("FAULTLENS_ENABLE_CHECKPOINTS"), default=True),
     )
+
+
+
+def _parse_bool(explicit: Optional[bool], raw: Optional[str], *, default: bool) -> bool:
+    if explicit is not None:
+        return explicit
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}

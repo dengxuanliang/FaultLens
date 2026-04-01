@@ -31,3 +31,17 @@ def test_load_settings_auto_loads_default_dotenv(tmp_path, monkeypatch):
     settings = load_settings()
 
     assert settings.model == "auto-model"
+
+
+def test_load_settings_reads_scaling_defaults(tmp_path):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "FAULTLENS_LLM_MAX_WORKERS=4\nFAULTLENS_RESUME=true\nFAULTLENS_ENABLE_CHECKPOINTS=false\n",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(env_path=env_path)
+
+    assert settings.llm_max_workers == 4
+    assert settings.resume is True
+    assert settings.enable_checkpoints is False

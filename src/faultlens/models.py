@@ -74,6 +74,9 @@ class AttributionResult:
     secondary_cause: Optional[str] = None
     slice_fields: Dict[str, Any] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
+    llm_parse_mode: Optional[str] = None
+    llm_parse_reason: Optional[str] = None
+    llm_raw_response_excerpt: Optional[str] = None
 
 
 @dataclass

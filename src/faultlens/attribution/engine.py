@@ -16,17 +16,21 @@ _ALLOWED_ROOT_CAUSES = {
 }
 
 
+
 def _normalize_root_cause(value: Optional[str]) -> str:
     if value in _ALLOWED_ROOT_CAUSES:
         return value  # type: ignore[return-value]
     return "insufficient_evidence"
 
 
+
 def build_final_case_result(
     case: CaseRecord,
     findings: DeterministicFindings,
     llm_result: Optional[Dict[str, Any]],
+    llm_parse_info: Optional[Dict[str, Any]] = None,
 ) -> AttributionResult:
+    llm_parse_info = llm_parse_info or {}
     if case.case_status != "attributable_failure":
         return AttributionResult(
             case_id=case.case_id,
@@ -48,6 +52,9 @@ def build_final_case_result(
             secondary_cause=None,
             slice_fields=dict(case.metadata.get("slice_fields", {})),
             warnings=list(case.warnings) + list(findings.warnings),
+            llm_parse_mode=llm_parse_info.get("status"),
+            llm_parse_reason=llm_parse_info.get("invalid_reason"),
+            llm_raw_response_excerpt=llm_parse_info.get("raw_response_excerpt"),
         )
 
     root_cause = _normalize_root_cause(findings.root_cause_hint)
@@ -95,4 +102,7 @@ def build_final_case_result(
         secondary_cause=secondary_cause,
         slice_fields=dict(case.metadata.get("slice_fields", {})),
         warnings=list(case.warnings) + list(findings.warnings),
+        llm_parse_mode=llm_parse_info.get("status"),
+        llm_parse_reason=llm_parse_info.get("invalid_reason"),
+        llm_raw_response_excerpt=llm_parse_info.get("raw_response_excerpt"),
     )
