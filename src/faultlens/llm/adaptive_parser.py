@@ -30,8 +30,15 @@ _SECTION_ALIASES = {
         "问题",
     ],
     "secondary_cause": ["secondary cause", "次要原因", "次因", "次要问题"],
-    "explanation": ["explanation", "analysis", "summary", "reasoning", "解释", "分析", "说明", "总结"],
+    "failure_stage": ["failure stage", "stage", "失败阶段", "阶段"],
+    "summary": ["summary", "摘要"],
+    "explanation": ["explanation", "analysis", "reasoning", "解释", "分析", "说明"],
     "evidence": ["evidence", "observations", "proof", "证据", "依据", "现象", "观察"],
+    "evidence_refs": ["evidence refs", "references", "refs", "evidence references", "证据引用", "引用"],
+    "deterministic_alignment": ["deterministic alignment", "alignment", "规则一致性", "一致性", "对齐情况"],
+    "confidence": ["confidence", "置信度"],
+    "needs_human_review": ["needs human review", "human review", "需要人工复核", "人工复核"],
+    "review_reason": ["review reason", "human review reason", "复核原因", "复核理由"],
     "improvement_hints": [
         "improvement hints",
         "suggestions",
@@ -133,6 +140,30 @@ _ROOT_CAUSE_KEYWORDS = {
     ],
 }
 
+_ALLOWED_FAILURE_STAGES = {
+    "task_understanding",
+    "interface_contract",
+    "implementation",
+    "execution_runtime",
+    "evaluation_judgment",
+    "unknown",
+}
+
+_FAILURE_STAGE_KEYWORDS = {
+    "task_understanding": ["task", "requirement", "misunderstood", "题意", "需求"],
+    "interface_contract": ["signature", "interface", "api", "entrypoint", "contract", "签名", "接口", "入口"],
+    "implementation": ["logic", "implementation", "syntax", "compile", "bug", "实现", "逻辑", "语法", "编译"],
+    "execution_runtime": ["runtime", "exception", "crash", "timeout", "运行时", "异常", "超时"],
+    "evaluation_judgment": ["evaluation", "judge", "grader", "accepted=false", "评测", "判题", "标签"],
+}
+
+_ALLOWED_DETERMINISTIC_ALIGNMENT = {
+    "consistent",
+    "partially_consistent",
+    "conflicting",
+    "insufficient_deterministic_evidence",
+}
+
 
 @dataclass
 class ParsedAttributionResponse:
@@ -209,8 +240,14 @@ def _code_only_payload(text: str) -> Dict[str, Any]:
     return {
         "root_cause": None,
         "secondary_cause": None,
+        "failure_stage": "unknown",
+        "summary": "The model returned code instead of a structured analysis.",
         "explanation": "LLM returned code-only content; keep deterministic root-cause classification and preserve the returned code as evidence.",
         "observable_evidence": [_trim_text(text, 800)],
+        "deterministic_alignment": "insufficient_deterministic_evidence",
+        "confidence": 0.5,
+        "needs_human_review": False,
+        "review_reason": None,
         "improvement_hints": [],
         "llm_signals": ["code_only_response"],
         "evidence_refs": [{"source": "llm_code_only_response"}],
@@ -221,8 +258,15 @@ def _parse_sectioned_or_freeform_text(text: str) -> Optional[Dict[str, Any]]:
     sections = _collect_sections(text)
     root_cause_raw = _first_non_empty(sections.get("root_cause", []))
     secondary_raw = _first_non_empty(sections.get("secondary_cause", []))
+    failure_stage_raw = _first_non_empty(sections.get("failure_stage", []))
+    summary = _merge_lines(sections.get("summary", []))
     explanation = _merge_lines(sections.get("explanation", []))
     evidence = _clean_bullets(sections.get("evidence", []))
+    evidence_refs = _clean_bullets(sections.get("evidence_refs", []))
+    deterministic_alignment_raw = _first_non_empty(sections.get("deterministic_alignment", []))
+    confidence_raw = _first_non_empty(sections.get("confidence", []))
+    needs_human_review_raw = _first_non_empty(sections.get("needs_human_review", []))
+    review_reason = _merge_lines(sections.get("review_reason", []))
     hints = _clean_bullets(sections.get("improvement_hints", []))
 
     if not explanation:
@@ -248,11 +292,17 @@ def _parse_sectioned_or_freeform_text(text: str) -> Optional[Dict[str, Any]]:
         {
             "root_cause": root_cause,
             "secondary_cause": secondary_cause,
+            "failure_stage": failure_stage_raw,
+            "summary": summary,
             "explanation": explanation,
             "observable_evidence": evidence,
+            "evidence_refs": evidence_refs or [{"source": "llm_adaptive_parser"}],
+            "deterministic_alignment": deterministic_alignment_raw,
+            "confidence": confidence_raw,
+            "needs_human_review": needs_human_review_raw,
+            "review_reason": review_reason,
             "improvement_hints": hints,
             "llm_signals": ["adaptive_response_parser"],
-            "evidence_refs": [{"source": "llm_adaptive_parser"}],
         }
     )
 
@@ -341,22 +391,36 @@ def _infer_root_cause(text: Optional[str]) -> Optional[str]:
 
 def _normalize_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     explanation = payload.get("explanation") or ""
+    summary = payload.get("summary") or ""
     evidence = _ensure_list_of_strings(payload.get("observable_evidence"))
     hints = _ensure_list_of_strings(payload.get("improvement_hints"))
     llm_signals = _ensure_list_of_strings(payload.get("llm_signals"))
-    refs = payload.get("evidence_refs") if isinstance(payload.get("evidence_refs"), list) else [{"source": "llm_response"}]
+    refs = _normalize_evidence_refs(payload.get("evidence_refs"))
     root_cause = _normalize_root_cause(payload.get("root_cause"))
     secondary_cause = _normalize_root_cause(payload.get("secondary_cause"), allow_none=True)
+    failure_stage = _normalize_failure_stage(payload.get("failure_stage"), root_cause, explanation)
+    deterministic_alignment = _normalize_deterministic_alignment(payload.get("deterministic_alignment"))
+    confidence = _normalize_confidence(payload.get("confidence"))
+    needs_human_review = _normalize_bool(payload.get("needs_human_review"), default=False)
+    review_reason = _normalize_review_reason(payload.get("review_reason"), needs_human_review)
+    if not summary:
+        summary = _build_summary(explanation, evidence)
     if not evidence and explanation:
         evidence = [_trim_text(explanation, 300)]
     return {
         "root_cause": root_cause,
         "secondary_cause": secondary_cause,
+        "failure_stage": failure_stage,
+        "summary": summary,
         "explanation": explanation,
         "observable_evidence": evidence,
+        "evidence_refs": refs,
+        "deterministic_alignment": deterministic_alignment,
+        "confidence": confidence,
+        "needs_human_review": needs_human_review,
+        "review_reason": review_reason,
         "improvement_hints": hints,
         "llm_signals": llm_signals,
-        "evidence_refs": refs,
     }
 
 
@@ -369,6 +433,87 @@ def _normalize_root_cause(value: Any, allow_none: bool = False) -> Optional[str]
     if inferred is not None:
         return inferred
     return None if allow_none else None
+
+
+def _normalize_failure_stage(value: Any, root_cause: Optional[str], explanation: str) -> str:
+    if value in _ALLOWED_FAILURE_STAGES:
+        return str(value)
+    return "unknown"
+
+
+def _infer_failure_stage(text: str) -> Optional[str]:
+    lower = (text or "").lower()
+    for stage, keywords in _FAILURE_STAGE_KEYWORDS.items():
+        if any(keyword.lower() in lower for keyword in keywords):
+            return stage
+    return None
+
+
+def _normalize_deterministic_alignment(value: Any) -> str:
+    if value in _ALLOWED_DETERMINISTIC_ALIGNMENT:
+        return str(value)
+    lower = str(value or "").strip().lower()
+    if "conflict" in lower:
+        return "conflicting"
+    if "partial" in lower:
+        return "partially_consistent"
+    if "consistent" in lower:
+        return "consistent"
+    return "insufficient_deterministic_evidence"
+
+
+def _normalize_confidence(value: Any) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return 0.5
+    return max(0.0, min(1.0, numeric))
+
+
+def _normalize_bool(value: Any, *, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    lower = str(value or "").strip().lower()
+    if lower in {"true", "yes", "1", "是"}:
+        return True
+    if lower in {"false", "no", "0", "否"}:
+        return False
+    return default
+
+
+def _normalize_review_reason(value: Any, needs_human_review: bool) -> Optional[str]:
+    text = str(value).strip() if value is not None else ""
+    if needs_human_review:
+        return text or "unspecified_review_reason"
+    return None
+
+
+def _build_summary(explanation: str, evidence: list[str]) -> str:
+    first = _first_sentence(explanation)
+    if first:
+        return first
+    if evidence:
+        return _trim_text(evidence[0], 160)
+    return ""
+
+
+def _first_sentence(text: str) -> str:
+    cleaned = str(text or "").strip()
+    if not cleaned:
+        return ""
+    parts = re.split(r"(?<=[.!?。！？])\s+", cleaned, maxsplit=1)
+    return _trim_text(parts[0].strip(), 160)
+
+
+def _normalize_evidence_refs(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        refs: list[Any] = []
+        for item in value:
+            if isinstance(item, (str, dict)) and item:
+                refs.append(item)
+        if refs:
+            return refs[:5]
+    return [{"source": "llm_response"}]
 
 
 def _ensure_list_of_strings(value: Any) -> list[str]:

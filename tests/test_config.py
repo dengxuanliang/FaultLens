@@ -36,12 +36,15 @@ def test_load_settings_auto_loads_default_dotenv(tmp_path, monkeypatch):
 def test_load_settings_reads_scaling_defaults(tmp_path):
     env_path = tmp_path / ".env"
     env_path.write_text(
-        "FAULTLENS_LLM_MAX_WORKERS=4\nFAULTLENS_RESUME=true\nFAULTLENS_ENABLE_CHECKPOINTS=false\n",
+        "FAULTLENS_LLM_MAX_WORKERS=4\nFAULTLENS_LLM_MAX_RETRIES=2\nFAULTLENS_LLM_RETRY_BACKOFF_SECONDS=3\nFAULTLENS_LLM_RETRY_ON_5XX=false\nFAULTLENS_RESUME=true\nFAULTLENS_ENABLE_CHECKPOINTS=false\n",
         encoding="utf-8",
     )
 
     settings = load_settings(env_path=env_path)
 
     assert settings.llm_max_workers == 4
+    assert settings.llm_max_retries == 2
+    assert settings.llm_retry_backoff_seconds == 3
+    assert settings.llm_retry_on_5xx is False
     assert settings.resume is True
     assert settings.enable_checkpoints is False

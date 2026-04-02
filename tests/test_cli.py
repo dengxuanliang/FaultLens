@@ -37,6 +37,11 @@ def test_cli_accepts_scaling_flags(tmp_path, fixtures_dir):
         str(output_dir),
         "--llm-max-workers",
         "2",
+        "--llm-max-retries",
+        "5",
+        "--llm-retry-backoff-seconds",
+        "3",
+        "--no-llm-retry-on-5xx",
         "--resume",
     ])
 

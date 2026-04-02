@@ -22,6 +22,11 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--base-url")
     analyze.add_argument("--api-key")
     analyze.add_argument("--llm-max-workers", type=int)
+    analyze.add_argument("--llm-max-retries", type=int)
+    analyze.add_argument("--llm-retry-backoff-seconds", type=int)
+    analyze.add_argument("--llm-retry-on-5xx", dest="llm_retry_on_5xx", action="store_true")
+    analyze.add_argument("--no-llm-retry-on-5xx", dest="llm_retry_on_5xx", action="store_false")
+    analyze.set_defaults(llm_retry_on_5xx=None)
     analyze.add_argument("--resume", action="store_true")
     analyze.add_argument("--disable-checkpoints", action="store_true")
     return parser
@@ -46,6 +51,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         model=args.model,
         output_dir=Path(args.output_dir) if args.output_dir else None,
         llm_max_workers=args.llm_max_workers,
+        llm_max_retries=args.llm_max_retries,
+        llm_retry_backoff_seconds=args.llm_retry_backoff_seconds,
+        llm_retry_on_5xx=args.llm_retry_on_5xx,
         resume=True if args.resume else None,
         enable_checkpoints=False if args.disable_checkpoints else None,
     )

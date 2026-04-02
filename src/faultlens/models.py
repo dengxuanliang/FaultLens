@@ -77,6 +77,8 @@ class AttributionResult:
     llm_parse_mode: Optional[str] = None
     llm_parse_reason: Optional[str] = None
     llm_raw_response_excerpt: Optional[str] = None
+    llm_raw_response_path: Optional[str] = None
+    llm_raw_response_sha256: Optional[str] = None
     hierarchical_cause: Dict[str, Any] = field(default_factory=dict)
 
 

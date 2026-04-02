@@ -59,6 +59,20 @@ Supported environment variables:
 - `FAULTLENS_OUTPUT_DIR`
 - `FAULTLENS_REQUEST_TIMEOUT`
 - `FAULTLENS_EXECUTION_TIMEOUT`
+- `FAULTLENS_LLM_MAX_WORKERS`
+- `FAULTLENS_LLM_MAX_RETRIES`
+- `FAULTLENS_LLM_RETRY_BACKOFF_SECONDS`
+- `FAULTLENS_LLM_RETRY_ON_5XX`
+- `FAULTLENS_RESUME`
+- `FAULTLENS_ENABLE_CHECKPOINTS`
+
+CLI flags:
+- `--llm-max-workers`
+- `--llm-max-retries`
+- `--llm-retry-backoff-seconds`
+- `--llm-retry-on-5xx` / `--no-llm-retry-on-5xx`
+- `--resume`
+- `--disable-checkpoints`
 
 If LLM settings are absent or the endpoint is unavailable, FaultLens falls back to deterministic-only attribution and still writes reports.
 
@@ -68,8 +82,18 @@ A normal analysis run writes:
 - `analysis_report.md`
 - `case_analysis.jsonl`
 - `summary.json`
+- `run_metadata.json`
+- `hierarchical_root_cause_report.md`
 - `cases/<case_id>.md`
 - `exemplars/*.md`
+- `llm_raw_responses/<case_id>.txt` when an LLM raw reply or error body is available
+- `faultlens_checkpoint.sqlite3` when checkpoints are enabled
+
+Structured outputs include:
+- `case_analysis.jsonl`: per-case attribution, parse mode, parse reason, raw-response path, raw-response sha256
+- `run_metadata.json`: join stats, model summary, LLM warning log, response-quality stats, checkpoint path
+
+If an LLM request fails with a provider response body, FaultLens persists that raw body into `llm_raw_responses/` for later manual audit.
 
 ## Language support
 

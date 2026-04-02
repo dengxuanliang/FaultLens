@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -43,8 +44,10 @@ def run_analysis(
     case_analysis_path = output_dir / "case_analysis.jsonl"
     cases_dir = output_dir / "cases"
     exemplars_dir = output_dir / "exemplars"
+    llm_raw_responses_dir = output_dir / "llm_raw_responses"
     cases_dir.mkdir(parents=True, exist_ok=True)
     exemplars_dir.mkdir(parents=True, exist_ok=True)
+    llm_raw_responses_dir.mkdir(parents=True, exist_ok=True)
 
     summary_accumulator = SummaryAccumulator()
     case_status_counts = {"passed": 0, "attributable_failure": 0, "data_issue": 0, "join_issue": 0}
@@ -90,10 +93,22 @@ def run_analysis(
                             llm_response_stats=llm_response_stats,
                             result_handle=result_handle,
                             checkpoint=checkpoint,
+                            llm_raw_responses_dir=llm_raw_responses_dir,
                         )
                         batch = []
                 else:
-                    result = build_final_case_result(record, findings, llm_result=None, llm_parse_info={"status": None, "invalid_reason": None, "raw_response_excerpt": None})
+                    result = build_final_case_result(
+                        record,
+                        findings,
+                        llm_result=None,
+                        llm_parse_info={
+                            "status": None,
+                            "invalid_reason": None,
+                            "raw_response_excerpt": None,
+                            "raw_response_path": None,
+                            "raw_response_sha256": None,
+                        },
+                    )
                     _persist_result(result, summary_accumulator, case_status_counts, result_handle, checkpoint, llm_warnings, llm_response_stats)
 
             if batch:
@@ -107,6 +122,7 @@ def run_analysis(
                     llm_response_stats=llm_response_stats,
                     result_handle=result_handle,
                     checkpoint=checkpoint,
+                    llm_raw_responses_dir=llm_raw_responses_dir,
                 )
 
     if llm_response_stats["attempted"]:
@@ -189,6 +205,9 @@ def _prepare_output_dir(output_dir: Path, *, resume: bool) -> None:
     for directory in [output_dir / "cases", output_dir / "exemplars"]:
         if directory.exists():
             shutil.rmtree(directory)
+    raw_responses_dir = output_dir / "llm_raw_responses"
+    if raw_responses_dir.exists():
+        shutil.rmtree(raw_responses_dir)
 
 
 
@@ -203,11 +222,13 @@ def _flush_llm_batch(
     llm_response_stats: Dict[str, Any],
     result_handle,
     checkpoint: CheckpointStore,
+    llm_raw_responses_dir: Path,
 ) -> None:
     cases = [item["case"] for item in batch]
     results = list(executor.map(lambda current: _run_llm_case(current, settings), cases))
     for item, llm_outcome in zip(batch, results):
         llm_result, warning, parse_info = llm_outcome
+        _persist_llm_raw_response(llm_raw_responses_dir, item["record"].case_id, parse_info)
         _update_llm_stats(llm_response_stats, item["record"].case_id, parse_info)
         if warning:
             llm_warnings.append(warning)
@@ -221,7 +242,7 @@ def _run_llm_case(case: Dict[str, Any], settings: Settings) -> tuple[Optional[Di
     try:
         llm_result = client.complete_json(build_attribution_messages(case))
     except Exception as exc:  # noqa: BLE001
-        return None, f"llm unavailable: {exc}", {"status": "request_error", "invalid_reason": type(exc).__name__, "raw_response_excerpt": None}
+        return None, f"llm unavailable: {exc}", {"status": "request_error", "invalid_reason": type(exc).__name__, "raw_response_excerpt": None, "raw_response_path": None, "raw_response_sha256": None}
     return llm_result, client.last_warning, dict(client.last_completion_info)
 
 
@@ -249,6 +270,18 @@ def _update_llm_stats(stats: Dict[str, Any], case_id: str, parse_info: Dict[str,
         _increment_reason(stats["nonconforming_reasons"], reason or "invalid")
     elif status == "request_error":
         stats["request_errors"] += 1
+
+
+def _persist_llm_raw_response(llm_raw_responses_dir: Path, case_id: str, parse_info: Dict[str, Any]) -> None:
+    raw_response_text = parse_info.get("raw_response_text")
+    if not raw_response_text:
+        parse_info["raw_response_path"] = None
+        parse_info["raw_response_sha256"] = parse_info.get("raw_response_sha256")
+        return
+    raw_response_path = llm_raw_responses_dir / f"{case_id}.txt"
+    raw_response_path.write_text(raw_response_text, encoding="utf-8")
+    parse_info["raw_response_path"] = str(raw_response_path.relative_to(llm_raw_responses_dir.parent))
+    parse_info["raw_response_sha256"] = parse_info.get("raw_response_sha256") or hashlib.sha256(raw_response_text.encode("utf-8")).hexdigest()
 
 
 

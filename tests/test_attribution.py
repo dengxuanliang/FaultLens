@@ -49,3 +49,40 @@ def test_build_final_case_result_skips_passed_cases():
     assert result.root_cause is None
     assert result.explanation.startswith("Case did not enter attribution")
     assert result.hierarchical_cause["l1"]["code"] == "unknown_insufficient_evidence"
+
+
+def test_build_final_case_result_uses_llm_confidence_and_review_flags():
+    case = make_case()
+    findings = DeterministicFindings(
+        signals=["test_failure"],
+        root_cause_hint="solution_incorrect",
+        findings={"test_status": "failed"},
+    )
+
+    result = build_final_case_result(
+        case,
+        findings,
+        llm_result={
+            "root_cause": "possible_evaluation_mismatch",
+            "secondary_cause": None,
+            "failure_stage": "evaluation_judgment",
+            "summary": "Evaluation output conflicts with deterministic findings.",
+            "explanation": "The code appears correct, but the evaluator still marked it failed.",
+            "observable_evidence": ["accepted=false despite passing checks"],
+            "evidence_refs": ["evaluation.accepted"],
+            "deterministic_alignment": "conflicting",
+            "confidence": 0.41,
+            "needs_human_review": True,
+            "review_reason": "deterministic and evaluator disagree",
+            "improvement_hints": ["Inspect evaluator logs."],
+            "llm_signals": ["structured_output"],
+        },
+    )
+
+    assert result.final_decision_source == "deterministic_plus_llm"
+    assert result.root_cause == "possible_evaluation_mismatch"
+    assert result.confidence == 0.41
+    assert result.needs_human_review is True
+    assert result.review_reason == "deterministic and evaluator disagree"
+    assert result.llm_judgment["failure_stage"] == "evaluation_judgment"
+    assert result.llm_judgment["deterministic_alignment"] == "conflicting"

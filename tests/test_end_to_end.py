@@ -202,6 +202,13 @@ def test_case_report_surfaces_runner_degradation_warnings(tmp_path: Path, fixtur
 
 def test_case_output_includes_raw_llm_excerpt_and_parse_metadata(tmp_path: Path, fixtures_dir: Path, monkeypatch):
     output_dir = tmp_path / "outputs"
+    raw_response = """Root Cause: solution incorrect
+Explanation: The implementation adds 3 instead of doubling x.
+Evidence:
+- solve(7) returned 10
+Improvement Hints:
+- Use multiplication instead of addition.
+"""
 
     class FakeClient:
         def __init__(self, settings):
@@ -211,6 +218,7 @@ def test_case_output_includes_raw_llm_excerpt_and_parse_metadata(tmp_path: Path,
                 "status": "adaptive_parse",
                 "invalid_reason": "sectioned_text",
                 "raw_response_excerpt": "Root Cause: solution incorrect",
+                "raw_response_text": raw_response,
             }
 
         def complete_json(self, messages):
@@ -246,9 +254,69 @@ def test_case_output_includes_raw_llm_excerpt_and_parse_metadata(tmp_path: Path,
     assert failure["llm_parse_mode"] == "adaptive_parse"
     assert failure["llm_parse_reason"] == "sectioned_text"
     assert failure["llm_raw_response_excerpt"] == "Root Cause: solution incorrect"
+    assert failure["llm_raw_response_path"] == "llm_raw_responses/2.txt"
+    assert failure["llm_raw_response_sha256"]
 
     report_text = (output_dir / "analysis_report.md").read_text(encoding="utf-8")
     assert "raw_response_excerpts" in report_text
 
     case_text = (output_dir / "cases" / "2.md").read_text(encoding="utf-8")
     assert "Root Cause: solution incorrect" in case_text
+    assert "llm_raw_responses/2.txt" in case_text
+
+    raw_response_path = output_dir / "llm_raw_responses" / "2.txt"
+    assert raw_response_path.exists()
+    assert raw_response_path.read_text(encoding="utf-8") == raw_response
+
+
+def test_case_output_persists_request_error_response_body(tmp_path: Path, fixtures_dir: Path, monkeypatch):
+    output_dir = tmp_path / "outputs"
+    error_body = '{"error":{"message":"rate limit exceeded","type":"rate_limit"}}'
+
+    class FakeClient:
+        def __init__(self, settings):
+            self.enabled = True
+            self.last_warning = "llm unavailable: HTTP Error 429: Too Many Requests"
+            self.last_completion_info = {
+                "status": "request_error",
+                "invalid_reason": "HTTPError 429: Too Many Requests",
+                "raw_response_excerpt": error_body,
+                "raw_response_text": error_body,
+                "raw_response_sha256": "abc123",
+            }
+
+        def complete_json(self, messages):
+            return None
+
+    monkeypatch.setattr("faultlens.orchestrator.LLMClient", FakeClient)
+
+    exit_code = main([
+        "analyze",
+        "--input",
+        str(fixtures_dir / "inference_sample.jsonl"),
+        str(fixtures_dir / "results_sample.jsonl"),
+        "--output-dir",
+        str(output_dir),
+        "--api-key",
+        "k",
+        "--base-url",
+        "http://invalid.local",
+        "--model",
+        "m",
+    ])
+
+    assert exit_code == 0
+    rows = [json.loads(line) for line in (output_dir / "case_analysis.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    failure = next(row for row in rows if row["case_id"] == "2")
+    assert failure["llm_parse_mode"] == "request_error"
+    assert failure["llm_parse_reason"] == "HTTPError 429: Too Many Requests"
+    assert failure["llm_raw_response_path"] == "llm_raw_responses/2.txt"
+    assert failure["llm_raw_response_sha256"] == "abc123"
+
+    case_text = (output_dir / "cases" / "2.md").read_text(encoding="utf-8")
+    assert "HTTPError 429: Too Many Requests" in case_text
+    assert "llm_raw_responses/2.txt" in case_text
+
+    raw_response_path = output_dir / "llm_raw_responses" / "2.txt"
+    assert raw_response_path.exists()
+    assert raw_response_path.read_text(encoding="utf-8") == error_body

@@ -68,6 +68,8 @@ def render_case_report(result: AttributionResult) -> str:
         f"- LLM 解析模式：{result.llm_parse_mode or '无'}",
         f"- LLM 解析原因：{result.llm_parse_reason or '无'}",
         f"- 原始回复摘录：{result.llm_raw_response_excerpt or '无'}",
+        f"- 原始回复文件：{result.llm_raw_response_path or '无'}",
+        f"- 原始回复 SHA256：{result.llm_raw_response_sha256 or '无'}",
         "## 警告",
         ("\n".join(f"- {warning}" for warning in result.warnings) if result.warnings else "- 无"),
         "## 调试建议",

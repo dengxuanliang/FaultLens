@@ -65,6 +65,8 @@ def build_final_case_result(
             llm_parse_mode=llm_parse_info.get("status"),
             llm_parse_reason=llm_parse_info.get("invalid_reason"),
             llm_raw_response_excerpt=llm_parse_info.get("raw_response_excerpt"),
+            llm_raw_response_path=llm_parse_info.get("raw_response_path"),
+            llm_raw_response_sha256=llm_parse_info.get("raw_response_sha256"),
             hierarchical_cause=hierarchical_cause,
         )
 
@@ -75,6 +77,7 @@ def build_final_case_result(
     explanation = f"Root cause classified as {root_cause} using deterministic-first analysis."
     improvement_hints = ["inspect failing deterministic findings"]
     secondary_cause = None
+    confidence = 0.7 if findings.signals else 0.3
     if llm_result:
         llm_payload = llm_result
         llm_signals = list(llm_result.get("llm_signals", []))
@@ -83,6 +86,7 @@ def build_final_case_result(
         secondary_cause = _normalize_root_cause(llm_result.get("secondary_cause")) if llm_result.get("secondary_cause") else None
         explanation = llm_result.get("explanation") or explanation
         improvement_hints = list(llm_result.get("improvement_hints") or improvement_hints)
+        confidence = float(llm_result.get("confidence")) if llm_result.get("confidence") is not None else confidence
 
     evidence = list(llm_result.get("observable_evidence", [])) if llm_result else []
     if not evidence:
@@ -90,8 +94,11 @@ def build_final_case_result(
 
     review_reason = None
     needs_human_review = root_cause in {"insufficient_evidence", "possible_evaluation_mismatch"}
+    if llm_result:
+        needs_human_review = bool(llm_result.get("needs_human_review", needs_human_review))
+        review_reason = llm_result.get("review_reason")
     if needs_human_review:
-        review_reason = root_cause
+        review_reason = review_reason or root_cause
 
     hierarchical_cause = build_hierarchical_cause(
         case_status=case.case_status,
@@ -115,7 +122,7 @@ def build_final_case_result(
         deterministic_findings=dict(findings.findings),
         llm_judgment=llm_payload,
         final_decision_source=final_decision_source,
-        confidence=0.7 if findings.signals else 0.3,
+        confidence=confidence,
         needs_human_review=needs_human_review,
         review_reason=review_reason,
         improvement_hints=improvement_hints,
@@ -126,5 +133,7 @@ def build_final_case_result(
         llm_parse_mode=llm_parse_info.get("status"),
         llm_parse_reason=llm_parse_info.get("invalid_reason"),
         llm_raw_response_excerpt=llm_parse_info.get("raw_response_excerpt"),
+        llm_raw_response_path=llm_parse_info.get("raw_response_path"),
+        llm_raw_response_sha256=llm_parse_info.get("raw_response_sha256"),
         hierarchical_cause=hierarchical_cause,
     )
