@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from faultlens.deterministic.runners.base import sandbox_available
 from faultlens.deterministic.runners.python_runner import PythonRunner
 
 
@@ -11,10 +12,15 @@ def test_python_runner_executes_solution_and_harness():
         timeout_seconds=5,
     )
 
-    assert result.available is True
-    assert result.compile_status == "passed"
-    assert result.test_status == "passed"
-    assert result.timed_out is False
+    if sandbox_available():
+        assert result.available is True
+        assert result.compile_status == "passed"
+        assert result.test_status == "passed"
+        assert result.timed_out is False
+    else:
+        assert result.available is False
+        assert result.compile_status == "unavailable"
+        assert result.test_status == "unavailable"
 
 
 def test_python_runner_reports_syntax_error():

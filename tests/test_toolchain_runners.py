@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 
+from faultlens.deterministic.runners.base import sandbox_available
 from faultlens.deterministic.runners.registry import build_runner_registry
 
 
@@ -42,7 +43,7 @@ def test_cpp_runner_happy_path_when_toolchain_available():
     )
 
     compiler_available = shutil.which("g++") is not None or shutil.which("clang++") is not None
-    if compiler_available:
+    if compiler_available and sandbox_available():
         assert result.available is True
         assert result.compile_status == "passed"
         assert result.test_status == "passed"

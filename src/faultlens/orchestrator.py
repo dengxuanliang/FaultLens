@@ -18,7 +18,11 @@ from faultlens.models import AttributionResult, CaseRecord, DeterministicFinding
 from faultlens.normalize.failure_gate import apply_failure_gate
 from faultlens.normalize.joiner import join_records_iter
 from faultlens.reporting.aggregate import SummaryAccumulator
-from faultlens.reporting.render import render_analysis_report, render_case_report
+from faultlens.reporting.render import (
+    render_analysis_report,
+    render_case_report,
+    write_hierarchical_root_cause_report,
+)
 from faultlens.scale.checkpointing import CheckpointStore
 
 
@@ -133,6 +137,8 @@ def run_analysis(
     (output_dir / "analysis_report.md").write_text(render_analysis_report(summary, [], run_context), encoding="utf-8")
     (output_dir / "summary.json").write_text(json.dumps(asdict(summary), ensure_ascii=False, indent=2), encoding="utf-8")
     (output_dir / "run_metadata.json").write_text(json.dumps(run_context, ensure_ascii=False, indent=2), encoding="utf-8")
+    with (output_dir / "hierarchical_root_cause_report.md").open("w", encoding="utf-8") as handle:
+        write_hierarchical_root_cause_report(handle, summary, _iter_results(case_analysis_path))
 
     exemplar_ids = {item for ids in summary.exemplars.values() for item in ids[:1]}
     if case_id:
@@ -174,6 +180,7 @@ def _prepare_output_dir(output_dir: Path, *, resume: bool) -> None:
         output_dir / "analysis_report.md",
         output_dir / "summary.json",
         output_dir / "run_metadata.json",
+        output_dir / "hierarchical_root_cause_report.md",
         output_dir / "case_analysis.jsonl",
         output_dir / "faultlens_checkpoint.sqlite3",
     ]:
@@ -289,6 +296,14 @@ def _increment_reason(counter: Dict[str, int], reason: str) -> None:
 
 def _result_from_row(row: Dict[str, Any]) -> AttributionResult:
     return AttributionResult(**row)
+
+
+def _iter_results(case_analysis_path: Path) -> Iterator[AttributionResult]:
+    with case_analysis_path.open("r", encoding="utf-8") as handle:
+        for raw in handle:
+            if not raw.strip():
+                continue
+            yield _result_from_row(json.loads(raw))
 
 
 

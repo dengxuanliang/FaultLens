@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+from faultlens.attribution.hierarchy import build_hierarchical_cause
 from faultlens.models import AttributionResult, CaseRecord, DeterministicFindings
 
 _ALLOWED_ROOT_CAUSES = {
@@ -32,6 +33,15 @@ def build_final_case_result(
 ) -> AttributionResult:
     llm_parse_info = llm_parse_info or {}
     if case.case_status != "attributable_failure":
+        hierarchical_cause = build_hierarchical_cause(
+            case_status=case.case_status,
+            root_cause=None,
+            secondary_cause=None,
+            deterministic_signals=list(findings.signals),
+            deterministic_findings=dict(findings.findings),
+            llm_judgment=None,
+            final_decision_source="deterministic_only",
+        )
         return AttributionResult(
             case_id=case.case_id,
             case_status=case.case_status,
@@ -55,6 +65,7 @@ def build_final_case_result(
             llm_parse_mode=llm_parse_info.get("status"),
             llm_parse_reason=llm_parse_info.get("invalid_reason"),
             llm_raw_response_excerpt=llm_parse_info.get("raw_response_excerpt"),
+            hierarchical_cause=hierarchical_cause,
         )
 
     root_cause = _normalize_root_cause(findings.root_cause_hint)
@@ -82,6 +93,16 @@ def build_final_case_result(
     if needs_human_review:
         review_reason = root_cause
 
+    hierarchical_cause = build_hierarchical_cause(
+        case_status=case.case_status,
+        root_cause=root_cause,
+        secondary_cause=secondary_cause,
+        deterministic_signals=list(findings.signals),
+        deterministic_findings=dict(findings.findings),
+        llm_judgment=llm_payload,
+        final_decision_source=final_decision_source,
+    )
+
     return AttributionResult(
         case_id=case.case_id,
         case_status=case.case_status,
@@ -105,4 +126,5 @@ def build_final_case_result(
         llm_parse_mode=llm_parse_info.get("status"),
         llm_parse_reason=llm_parse_info.get("invalid_reason"),
         llm_raw_response_excerpt=llm_parse_info.get("raw_response_excerpt"),
+        hierarchical_cause=hierarchical_cause,
     )

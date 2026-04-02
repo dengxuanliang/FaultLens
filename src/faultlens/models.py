@@ -77,6 +77,7 @@ class AttributionResult:
     llm_parse_mode: Optional[str] = None
     llm_parse_reason: Optional[str] = None
     llm_raw_response_excerpt: Optional[str] = None
+    hierarchical_cause: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -84,6 +85,9 @@ class SummaryReport:
     total_cases: int
     root_cause_counts: Dict[str, int]
     deterministic_signal_counts: Dict[str, int]
+    hierarchy_counts: Dict[str, Dict[str, int]] = field(default_factory=dict)
+    hierarchy_subtype_counts: Dict[str, Dict[str, Dict[str, int]]] = field(default_factory=dict)
+    hierarchy_root_cause_cross: Dict[str, Dict[str, Dict[str, int]]] = field(default_factory=dict)
     review_queue: List[str] = field(default_factory=list)
     slices: Dict[str, Dict[str, Dict[str, int]]] = field(default_factory=dict)
     exemplars: Dict[str, List[str]] = field(default_factory=dict)

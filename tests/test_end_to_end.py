@@ -22,10 +22,17 @@ def test_cli_analyze_generates_outputs(tmp_path: Path, fixtures_dir: Path):
 
     assert exit_code == 0
     assert (output_dir / "analysis_report.md").exists()
+    assert (output_dir / "hierarchical_root_cause_report.md").exists()
     report_text = (output_dir / "analysis_report.md").read_text(encoding="utf-8")
     assert "# 输入警告" in report_text
     assert "# LLM 警告" in report_text
     assert "# LLM 响应质量" in report_text
+    assert "# 三层错因聚合" in report_text
+    hierarchy_report = (output_dir / "hierarchical_root_cause_report.md").read_text(encoding="utf-8")
+    assert "# 三层错因总览" in hierarchy_report
+    assert "# 主类到细类拆解" in hierarchy_report
+    assert "# 根因与三层错因交叉映射" in hierarchy_report
+    assert "# 待人工复核样本" in hierarchy_report
     assert (output_dir / "case_analysis.jsonl").exists()
     assert (output_dir / "summary.json").exists()
     assert (output_dir / "run_metadata.json").exists()
@@ -47,9 +54,17 @@ def test_cli_analyze_generates_outputs(tmp_path: Path, fixtures_dir: Path):
     assert "## 解释" in case_text
     assert "## 解析 / 编译 / 测试" in case_text
     assert "## LLM 解析信息" in case_text
+    assert "## 三层错因分析" in case_text
 
     rows = [json.loads(line) for line in (output_dir / "case_analysis.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
     assert {row["case_id"] for row in rows} == {"1", "2"}
+    failure = next(row for row in rows if row["case_id"] == "2")
+    l1_code = failure["hierarchical_cause"]["l1"]["code"]
+    assert l1_code in {"functional_semantic_error", "environment_evaluation_mismatch"}
+    summary = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["hierarchy_counts"]["l1"][l1_code] == 1
+    assert summary["hierarchy_subtype_counts"]["l1"][l1_code]
+    assert summary["hierarchy_root_cause_cross"]["l1"][l1_code]
 
 
 def test_cli_survives_llm_failure_and_falls_back(tmp_path: Path, fixtures_dir: Path, monkeypatch):
@@ -132,6 +147,11 @@ def test_cli_records_invalid_llm_response_stats_without_blocking(tmp_path: Path,
     rows = [json.loads(line) for line in (output_dir / "case_analysis.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
     failure = next(row for row in rows if row["case_id"] == "2")
     assert failure["final_decision_source"] == "deterministic_only"
+    assert failure["hierarchical_cause"]["l1"]["code"] in {
+        "functional_semantic_error",
+        "environment_evaluation_mismatch",
+    }
+    assert failure["hierarchical_cause"]["analysis_basis"]["decision_source"] == "deterministic_only"
 
     report_text = (output_dir / "analysis_report.md").read_text(encoding="utf-8")
     assert "# LLM 响应质量" in report_text

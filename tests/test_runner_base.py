@@ -37,7 +37,11 @@ def test_run_command_truncates_output_and_cleans_workspace():
         output_limit=64,
     )
 
-    assert result.returncode == 0
+    if sandbox_available():
+        assert result.returncode == 0
+    else:
+        assert result.returncode is None
+        assert "sandbox-exec unavailable" in " ".join(result.warnings)
     assert len(result.stdout_excerpt) <= DEFAULT_OUTPUT_LIMIT
     assert result.workspace_removed is True
     assert not Path(result.workspace_path).exists()
@@ -52,8 +56,13 @@ def test_run_command_times_out():
         output_limit=128,
     )
 
-    assert result.timed_out is True
-    assert result.returncode is None
+    if sandbox_available():
+        assert result.timed_out is True
+        assert result.returncode is None
+    else:
+        assert result.timed_out is False
+        assert result.returncode is None
+        assert "sandbox-exec unavailable" in " ".join(result.warnings)
     assert result.workspace_removed is True
 
 

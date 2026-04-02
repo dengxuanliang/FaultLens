@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, List, Mapping, Optional, Sequence
+from functools import lru_cache
 import os
 import shutil
 import subprocess
@@ -54,8 +55,22 @@ def truncate_output(text: str, limit: int = DEFAULT_OUTPUT_LIMIT) -> str:
     return text[:limit]
 
 
+@lru_cache(maxsize=1)
 def sandbox_available() -> bool:
-    return shutil.which("sandbox-exec") is not None
+    sandbox_exec = shutil.which("sandbox-exec")
+    if sandbox_exec is None:
+        return False
+    try:
+        completed = subprocess.run(
+            [sandbox_exec, "-p", "(version 1) (allow default)", "/usr/bin/true"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return False
+    return completed.returncode == 0
 
 
 def workspace_env(extra_env: Optional[Mapping[str, str]] = None) -> Dict[str, str]:

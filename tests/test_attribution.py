@@ -33,6 +33,9 @@ def test_build_final_case_result_uses_deterministic_fallback_when_no_llm():
     assert result.observable_evidence
     assert result.llm_judgment is None
     assert result.improvement_hints
+    assert result.hierarchical_cause["l1"]["code"] == "functional_semantic_error"
+    assert result.hierarchical_cause["l2"]["code"] == "code_implementation_and_local_logic"
+    assert result.hierarchical_cause["l3"]["code"] == "state_control_flow_and_invariant_management"
 
 
 def test_build_final_case_result_skips_passed_cases():
@@ -45,3 +48,4 @@ def test_build_final_case_result_skips_passed_cases():
 
     assert result.root_cause is None
     assert result.explanation.startswith("Case did not enter attribution")
+    assert result.hierarchical_cause["l1"]["code"] == "unknown_insufficient_evidence"

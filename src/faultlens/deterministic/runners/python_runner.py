@@ -20,18 +20,6 @@ class PythonRunner(BaseRunner):
     language = "python"
 
     def run(self, solution_code: str, test_code: str, timeout_seconds: int) -> RunnerResult:
-        if not sandbox_available():
-            return RunnerResult(
-                language=self.language,
-                available=False,
-                compile_status="unavailable",
-                test_status="unavailable",
-                timed_out=False,
-                exit_code=None,
-                stdout_excerpt="",
-                stderr_excerpt="",
-                warnings=["sandbox-exec unavailable; runtime execution disabled"],
-            )
         try:
             ast.parse(solution_code)
         except SyntaxError as exc:
@@ -46,6 +34,18 @@ class PythonRunner(BaseRunner):
                 stdout_excerpt="",
                 stderr_excerpt=message,
                 warnings=[],
+            )
+        if not sandbox_available():
+            return RunnerResult(
+                language=self.language,
+                available=False,
+                compile_status="unavailable",
+                test_status="unavailable",
+                timed_out=False,
+                exit_code=None,
+                stdout_excerpt="",
+                stderr_excerpt="",
+                warnings=["sandbox-exec unavailable; runtime execution disabled"],
             )
 
         combined_code = f"{solution_code.rstrip()}\n\n{test_code.rstrip()}\n"
