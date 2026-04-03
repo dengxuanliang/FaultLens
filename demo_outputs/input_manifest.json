@@ -1,0 +1,20 @@
+[
+  {
+    "path": "demo_outputs/demo_inference.jsonl",
+    "declared_order": 0,
+    "detected_role": "inference",
+    "size_bytes": 1493,
+    "mtime_epoch": 1775110036.699342,
+    "sha256": "51e0188801ca1a0fc88d31bc46dfbd6d0f4743a8e50ac5bdcfbf492f15ffe198",
+    "sample_record_count": 4
+  },
+  {
+    "path": "demo_outputs/demo_results.jsonl",
+    "declared_order": 1,
+    "detected_role": "results",
+    "size_bytes": 788,
+    "mtime_epoch": 1775110036.6994653,
+    "sha256": "6f6c272f77a33c1eb669db12927a93f3fd9d50d14f9699478ae63b2c66fcd073",
+    "sample_record_count": 4
+  }
+]

@@ -6,8 +6,9 @@ from faultlens.orchestrator import finalize_outputs
 from faultlens.scale.run_store import RunStore
 
 
-def test_cli_analyze_generates_outputs(tmp_path: Path, fixtures_dir: Path):
+def test_cli_analyze_generates_outputs(tmp_path: Path, fixtures_dir: Path, monkeypatch):
     output_dir = tmp_path / "outputs"
+    monkeypatch.chdir(tmp_path)
 
     exit_code = main(
         [
@@ -169,8 +170,9 @@ def test_cli_exports_case_analysis_from_final_results(tmp_path: Path, fixtures_d
     assert job["job_status"] in {"finalized", "llm_failed_retryable"}
 
 
-def test_finalize_can_rerender_without_reprocessing_inputs(tmp_path: Path, fixtures_dir: Path):
+def test_finalize_can_rerender_without_reprocessing_inputs(tmp_path: Path, fixtures_dir: Path, monkeypatch):
     output_dir = tmp_path / "outputs"
+    monkeypatch.chdir(tmp_path)
 
     exit_code = main(
         [

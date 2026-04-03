@@ -25,8 +25,9 @@ def test_cli_auto_loads_dotenv_output_dir(tmp_path, fixtures_dir, monkeypatch):
     assert "hierarchy_root_cause_cross" in summary
 
 
-def test_cli_accepts_scaling_flags(tmp_path, fixtures_dir):
+def test_cli_accepts_scaling_flags(tmp_path, fixtures_dir, monkeypatch):
     output_dir = tmp_path / "outs"
+    monkeypatch.chdir(tmp_path)
 
     exit_code = main([
         "analyze",
@@ -50,8 +51,9 @@ def test_cli_accepts_scaling_flags(tmp_path, fixtures_dir):
     assert (output_dir / "hierarchical_root_cause_report.md").exists()
 
 
-def test_cli_supports_rerender_subcommand(tmp_path, fixtures_dir):
+def test_cli_supports_rerender_subcommand(tmp_path, fixtures_dir, monkeypatch):
     output_dir = tmp_path / "outs"
+    monkeypatch.chdir(tmp_path)
 
     analyze_exit = main([
         "analyze",

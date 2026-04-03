@@ -83,6 +83,9 @@ def build_hierarchical_cause(
 
 
 def _classify_l1(root_cause: str, signal_set: set[str], findings: Dict[str, Any]) -> Dict[str, Any]:
+    logic_root_causes = {"solution_incorrect", "task_misunderstanding", "implementation_bug"}
+    logic_signals = {"test_failure", "logic_mismatch"}
+
     if signal_set & {"missing_code", "code_extraction_failed"} or root_cause == "incomplete_or_truncated_solution":
         return _level(
             "l1",
@@ -99,7 +102,9 @@ def _classify_l1(root_cause: str, signal_set: set[str], findings: Dict[str, Any]
             "代码在解析阶段就失败，属于语法/解析层面的直接错误。",
             _collect_evidence(signal_set, findings, ["parse_error_excerpt"]),
         )
-    if root_cause in {"possible_evaluation_mismatch", "environment_or_api_mismatch"} or signal_set & {"suspicious_eval_mismatch"}:
+    if root_cause in {"possible_evaluation_mismatch", "environment_or_api_mismatch"} or (
+        signal_set & {"suspicious_eval_mismatch"} and root_cause not in logic_root_causes and not signal_set & logic_signals
+    ):
         return _level(
             "l1",
             "environment_evaluation_mismatch",
@@ -123,7 +128,7 @@ def _classify_l1(root_cause: str, signal_set: set[str], findings: Dict[str, Any]
             "代码在构建/编译阶段失败，属于导入、依赖或构建层面的表层错误。",
             _collect_evidence(signal_set, findings, ["stderr_excerpt", "runtime_error_excerpt"]),
         )
-    if signal_set & {"runtime_error"} or findings.get("runtime_error_excerpt"):
+    if signal_set & {"runtime_error"} or _has_non_assert_runtime_error(findings):
         return _level(
             "l1",
             "runtime_execution_error",
@@ -131,7 +136,7 @@ def _classify_l1(root_cause: str, signal_set: set[str], findings: Dict[str, Any]
             "代码能够开始执行，但在运行期抛出异常。",
             _collect_evidence(signal_set, findings, ["runtime_error_excerpt", "stderr_excerpt"]),
         )
-    if signal_set & {"test_failure", "logic_mismatch"} or root_cause in {"solution_incorrect", "task_misunderstanding", "implementation_bug"}:
+    if signal_set & logic_signals or root_cause in logic_root_causes:
         return _level(
             "l1",
             "functional_semantic_error",
@@ -362,6 +367,13 @@ def _first_matching(signal_set: set[str], candidates: list[str], *, default: str
         if candidate in signal_set:
             return candidate
     return default
+
+
+def _has_non_assert_runtime_error(findings: Dict[str, Any]) -> bool:
+    excerpt = str(findings.get("runtime_error_excerpt") or "")
+    if not excerpt.strip():
+        return False
+    return "assertionerror" not in excerpt.lower()
 
 
 def _collect_evidence(signal_set: set[str], findings: Dict[str, Any], finding_keys: list[str]) -> list[str]:

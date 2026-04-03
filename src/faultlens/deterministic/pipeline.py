@@ -113,6 +113,8 @@ def analyze_case_deterministically(case: Dict[str, Any], execution_timeout: int 
 
 def _suggest_root_cause(signals: List[str]) -> str:
     signal_set = set(signals)
+    if signal_set & {"test_failure", "logic_mismatch"}:
+        return "solution_incorrect"
     if "suspicious_eval_mismatch" in signal_set:
         return "possible_evaluation_mismatch"
     if signal_set & {"missing_code", "code_extraction_failed"}:
@@ -121,6 +123,4 @@ def _suggest_root_cause(signals: List[str]) -> str:
         return "contract_or_interface_violation"
     if signal_set & {"compile_error", "runtime_error"}:
         return "implementation_bug"
-    if signal_set & {"test_failure", "logic_mismatch"}:
-        return "solution_incorrect"
     return "insufficient_evidence"

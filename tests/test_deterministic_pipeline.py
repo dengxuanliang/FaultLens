@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from faultlens.deterministic.pipeline import analyze_cases_deterministically
+from faultlens.deterministic.pipeline import _suggest_root_cause, analyze_cases_deterministically
 from faultlens.deterministic.runners.base import sandbox_available
 from faultlens.ingest.resolver import detect_input_roles
 from faultlens.normalize.failure_gate import apply_failure_gate
@@ -26,3 +26,7 @@ def test_deterministic_pipeline_emits_structured_findings(fixtures_dir: Path):
     assert failure["deterministic_findings"]["canonical_diff_summary"]
     assert failure["deterministic_findings"]["test_harness_alignment_summary"]
     assert failure["deterministic_root_cause_hint"]
+
+
+def test_suggest_root_cause_prefers_logic_error_over_eval_mismatch_when_logic_signals_exist():
+    assert _suggest_root_cause(["suspicious_eval_mismatch", "test_failure", "logic_mismatch"]) == "solution_incorrect"
