@@ -16,6 +16,7 @@ FaultLens is a deterministic-first CLI agent for paired code-evaluation JSONL an
   - canonical/reference diff summaries
 - optionally calls an LLM for higher-level attribution
 - writes batch + single-case markdown reports plus structured JSON outputs
+- persists a durable `run.db` state store so long runs can resume and rerender from local state
 
 ## Inputs
 
@@ -64,7 +65,7 @@ Supported environment variables:
 - `FAULTLENS_LLM_RETRY_BACKOFF_SECONDS`
 - `FAULTLENS_LLM_RETRY_ON_5XX`
 - `FAULTLENS_RESUME`
-- `FAULTLENS_ENABLE_CHECKPOINTS`
+- `FAULTLENS_ENABLE_CHECKPOINTS` (deprecated, ignored by the durable run-store pipeline)
 
 CLI flags:
 - `--llm-max-workers`
@@ -72,13 +73,25 @@ CLI flags:
 - `--llm-retry-backoff-seconds`
 - `--llm-retry-on-5xx` / `--no-llm-retry-on-5xx`
 - `--resume`
-- `--disable-checkpoints`
+- `--disable-checkpoints` (deprecated no-op)
 
 If LLM settings are absent or the endpoint is unavailable, FaultLens falls back to deterministic-only attribution and still writes reports.
+
+### Rerender existing outputs
+
+If `run.db` already exists, you can rebuild reports without rescanning the source JSONL files:
+
+```bash
+PYTHONPATH=src python3 -m faultlens.cli rerender \
+  --output-dir ./outputs
+```
 
 ## Output
 
 A normal analysis run writes:
+- `run.db`
+- `input_manifest.json`
+- `analysis_manifest.json`
 - `analysis_report.md`
 - `case_analysis.jsonl`
 - `summary.json`
@@ -87,11 +100,12 @@ A normal analysis run writes:
 - `cases/<case_id>.md`
 - `exemplars/*.md`
 - `llm_raw_responses/<case_id>.txt` when an LLM raw reply or error body is available
-- `faultlens_checkpoint.sqlite3` when checkpoints are enabled
+
+`run.db` is the durable source of truth for resume and rerender. New runs do not depend on or generate a separate checkpoint database.
 
 Structured outputs include:
 - `case_analysis.jsonl`: per-case attribution, parse mode, parse reason, raw-response path, raw-response sha256
-- `run_metadata.json`: join stats, model summary, LLM warning log, response-quality stats, checkpoint path
+- `run_metadata.json`: join stats, model summary, LLM warning log, response-quality stats
 
 If an LLM request fails with a provider response body, FaultLens persists that raw body into `llm_raw_responses/` for later manual audit.
 

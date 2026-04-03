@@ -98,3 +98,23 @@ def test_run_store_requeues_expired_llm_jobs(tmp_path: Path) -> None:
 
     assert job["job_status"] == "llm_pending"
     assert job["worker_lease_token"] is None
+
+
+def test_run_store_records_ingest_events(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "run.db").open()
+    try:
+        store.record_ingest_event(
+            source_path="input.jsonl",
+            line_number=3,
+            severity="warning",
+            event_type="bad_json",
+            message="bad json at line 3 in input.jsonl",
+            payload_excerpt='{"broken":',
+        )
+        events = store.list_ingest_events()
+    finally:
+        store.close()
+
+    assert len(events) == 1
+    assert events[0]["event_type"] == "bad_json"
+    assert events[0]["line_number"] == 3

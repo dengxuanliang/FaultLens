@@ -48,3 +48,30 @@ def test_cli_accepts_scaling_flags(tmp_path, fixtures_dir):
     assert exit_code == 0
     assert (output_dir / "analysis_report.md").exists()
     assert (output_dir / "hierarchical_root_cause_report.md").exists()
+
+
+def test_cli_supports_rerender_subcommand(tmp_path, fixtures_dir):
+    output_dir = tmp_path / "outs"
+
+    analyze_exit = main([
+        "analyze",
+        "--input",
+        str(fixtures_dir / "inference_sample.jsonl"),
+        str(fixtures_dir / "results_sample.jsonl"),
+        "--output-dir",
+        str(output_dir),
+    ])
+
+    assert analyze_exit == 0
+
+    original = (output_dir / "analysis_report.md").read_text(encoding="utf-8")
+    (output_dir / "analysis_report.md").write_text("stale", encoding="utf-8")
+
+    rerender_exit = main([
+        "rerender",
+        "--output-dir",
+        str(output_dir),
+    ])
+
+    assert rerender_exit == 0
+    assert (output_dir / "analysis_report.md").read_text(encoding="utf-8") == original

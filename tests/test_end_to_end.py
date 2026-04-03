@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from faultlens.cli import main
+from faultlens.orchestrator import finalize_outputs
 from faultlens.scale.run_store import RunStore
 
 
@@ -127,9 +128,76 @@ def test_cli_persists_deterministic_results_in_run_store(tmp_path: Path, fixture
         store.close()
 
     assert row["case_status"] == "attributable_failure"
-    assert "logic_mismatch" in row["deterministic_signals_json"]
-    assert job["job_status"] in {"deterministic_done", "llm_pending", "llm_done", "llm_failed_terminal", "finalized"}
+    assert "suspicious_eval_mismatch" in row["deterministic_signals_json"]
+    assert row["deterministic_root_cause_hint"]
+    assert job["job_status"] in {
+        "deterministic_done",
+        "llm_pending",
+        "llm_done",
+        "llm_failed_terminal",
+        "llm_failed_retryable",
+        "finalized",
+    }
     assert job["deterministic_ready"] == 1
+
+
+def test_cli_exports_case_analysis_from_final_results(tmp_path: Path, fixtures_dir: Path):
+    output_dir = tmp_path / "outputs"
+
+    exit_code = main(
+        [
+            "analyze",
+            "--input",
+            str(fixtures_dir / "inference_sample.jsonl"),
+            str(fixtures_dir / "results_sample.jsonl"),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+
+    rows = [json.loads(line) for line in (output_dir / "case_analysis.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    store = RunStore(output_dir / "run.db").open()
+    try:
+        final_count = store.count_final_results()
+        job = store.get_job("2")
+    finally:
+        store.close()
+
+    assert len(rows) == final_count
+    assert job["job_status"] in {"finalized", "llm_failed_retryable"}
+
+
+def test_finalize_can_rerender_without_reprocessing_inputs(tmp_path: Path, fixtures_dir: Path):
+    output_dir = tmp_path / "outputs"
+
+    exit_code = main(
+        [
+            "analyze",
+            "--input",
+            str(fixtures_dir / "inference_sample.jsonl"),
+            str(fixtures_dir / "results_sample.jsonl"),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+
+    first_report = (output_dir / "analysis_report.md").read_text(encoding="utf-8")
+    first_summary = (output_dir / "summary.json").read_text(encoding="utf-8")
+
+    (output_dir / "analysis_report.md").write_text("stale", encoding="utf-8")
+    (output_dir / "summary.json").write_text("stale", encoding="utf-8")
+
+    finalize_outputs(output_dir=output_dir)
+
+    second_report = (output_dir / "analysis_report.md").read_text(encoding="utf-8")
+    second_summary = (output_dir / "summary.json").read_text(encoding="utf-8")
+
+    assert second_report == first_report
+    assert second_summary == first_summary
 
 
 def test_cli_records_invalid_llm_response_stats_without_blocking(tmp_path: Path, fixtures_dir: Path, monkeypatch):
@@ -359,7 +427,7 @@ def test_cli_persists_llm_attempt_audit_records(tmp_path: Path, fixtures_dir: Pa
     assert '"role": "system"' in attempts[0]["request_messages_json"]
     assert "logic mismatch" in attempts[0]["response_text"]
     assert attempts[0]["parse_mode"] == "strict_json"
-    assert job["job_status"] in {"llm_done", "finalized"}
+    assert job["job_status"] == "finalized"
 
 
 def test_case_output_persists_request_error_response_body(tmp_path: Path, fixtures_dir: Path, monkeypatch):

@@ -4,6 +4,8 @@ import pytest
 
 from faultlens.ingest.jsonl import load_jsonl
 from faultlens.ingest.resolver import detect_input_roles
+from faultlens.normalize.joiner import build_ingest_snapshot
+from faultlens.scale.run_store import RunStore
 
 
 def _fixtures_dir() -> Path:
@@ -53,3 +55,31 @@ def test_detect_input_roles_scans_past_outlier_first_record(tmp_path: Path) -> N
 
     assert resolved.inference_path == left
     assert resolved.detected_roles[str(left)] == "inference"
+
+
+def test_build_ingest_snapshot_persists_structured_ingest_events(tmp_path: Path) -> None:
+    inference_path = tmp_path / "inference.jsonl"
+    results_path = tmp_path / "results.jsonl"
+    inference_path.write_text(
+        '{"id":1,"content":"c","canonical_solution":"x","completion":"y"}\n'
+        '{"broken":\n'
+        '\n',
+        encoding="utf-8",
+    )
+    results_path.write_text(
+        '{"task_id":1,"accepted":false}\n'
+        '{"task_id":2,"accepted":false}\n',
+        encoding="utf-8",
+    )
+
+    store = RunStore(tmp_path / "run.db").open()
+    try:
+        build_ingest_snapshot(store, inference_path, results_path)
+        events = store.list_ingest_events()
+    finally:
+        store.close()
+
+    event_types = {event["event_type"] for event in events}
+    assert "bad_json" in event_types
+    assert "empty_line" in event_types
+    assert "missing_pair" in event_types

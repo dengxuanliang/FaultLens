@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from faultlens.config import load_settings
-from faultlens.orchestrator import run_analysis
+from faultlens.orchestrator import finalize_outputs, run_analysis
 
 
 
@@ -28,7 +28,10 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--no-llm-retry-on-5xx", dest="llm_retry_on_5xx", action="store_false")
     analyze.set_defaults(llm_retry_on_5xx=None)
     analyze.add_argument("--resume", action="store_true")
-    analyze.add_argument("--disable-checkpoints", action="store_true")
+    analyze.add_argument("--disable-checkpoints", action="store_true", help="deprecated no-op")
+
+    rerender = subparsers.add_parser("rerender")
+    rerender.add_argument("--output-dir", required=True)
     return parser
 
 
@@ -39,6 +42,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         args = parser.parse_args(list(argv) if argv is not None else None)
     except SystemExit as exc:
         return int(exc.code)
+
+    if args.command == "rerender":
+        finalize_outputs(output_dir=Path(args.output_dir))
+        return 0
 
     if args.command != "analyze":
         parser.print_help()

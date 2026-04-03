@@ -203,6 +203,60 @@ class RunStore:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def record_ingest_event(
+        self,
+        *,
+        source_path: str | None,
+        line_number: int | None,
+        severity: str,
+        event_type: str,
+        message: str,
+        payload_excerpt: str | None = None,
+    ) -> None:
+        connection = self._require_connection()
+        connection.execute(
+            """
+            INSERT INTO ingest_events(
+                source_path,
+                line_number,
+                severity,
+                event_type,
+                message,
+                payload_excerpt,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                source_path,
+                line_number,
+                severity,
+                event_type,
+                message,
+                payload_excerpt,
+                _utcnow_iso(),
+            ),
+        )
+        connection.commit()
+
+    def list_ingest_events(self) -> list[dict[str, Any]]:
+        connection = self._require_connection()
+        rows = connection.execute(
+            """
+            SELECT
+                id,
+                source_path,
+                line_number,
+                severity,
+                event_type,
+                message,
+                payload_excerpt,
+                created_at
+            FROM ingest_events
+            ORDER BY id
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def assert_resume_safe(
         self,
         *,
@@ -280,6 +334,16 @@ class RunStore:
         cursor = connection.execute("SELECT case_json FROM joined_cases ORDER BY CAST(case_id AS TEXT)")
         for row in cursor:
             yield json.loads(row["case_json"])
+
+    def load_joined_case(self, case_id: str) -> dict[str, Any]:
+        connection = self._require_connection()
+        row = connection.execute(
+            "SELECT case_json FROM joined_cases WHERE case_id = ?",
+            (case_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(case_id)
+        return json.loads(row["case_json"])
 
     def count_joined_cases(self) -> int:
         connection = self._require_connection()
@@ -669,6 +733,96 @@ class RunStore:
         )
         connection.commit()
         return int(cursor.rowcount)
+
+    def requeue_retryable_jobs(self, *, now: str) -> int:
+        connection = self._require_connection()
+        cursor = connection.execute(
+            """
+            UPDATE analysis_jobs
+            SET job_status = 'llm_pending',
+                next_retry_at = NULL,
+                updated_at = ?
+            WHERE job_status = 'llm_failed_retryable'
+              AND next_retry_at IS NOT NULL
+              AND next_retry_at <= ?
+            """,
+            (now, now),
+        )
+        connection.commit()
+        return int(cursor.rowcount)
+
+    def save_final_result(self, result_row: dict[str, Any]) -> None:
+        connection = self._require_connection()
+        now = _utcnow_iso()
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO final_results(
+                case_id,
+                final_result_json,
+                final_decision_source,
+                root_cause,
+                secondary_cause,
+                confidence,
+                needs_human_review,
+                review_reason,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM final_results WHERE case_id = ?), ?), ?)
+            """,
+            (
+                str(result_row["case_id"]),
+                json.dumps(result_row, ensure_ascii=False),
+                result_row.get("final_decision_source", "deterministic_only"),
+                result_row.get("root_cause"),
+                result_row.get("secondary_cause"),
+                result_row.get("confidence"),
+                int(bool(result_row.get("needs_human_review"))),
+                result_row.get("review_reason"),
+                str(result_row["case_id"]),
+                now,
+                now,
+            ),
+        )
+        connection.commit()
+
+    def iter_final_result_rows(self):
+        connection = self._require_connection()
+        cursor = connection.execute(
+            "SELECT final_result_json FROM final_results ORDER BY CAST(case_id AS TEXT)"
+        )
+        for row in cursor:
+            yield json.loads(row["final_result_json"])
+
+    def count_final_results(self) -> int:
+        connection = self._require_connection()
+        row = connection.execute("SELECT COUNT(*) AS value FROM final_results").fetchone()
+        return int(row["value"])
+
+    def has_final_result(self, case_id: str) -> bool:
+        connection = self._require_connection()
+        row = connection.execute(
+            "SELECT 1 FROM final_results WHERE case_id = ? LIMIT 1",
+            (case_id,),
+        ).fetchone()
+        return row is not None
+
+    def iter_llm_attempt_rows(self):
+        connection = self._require_connection()
+        cursor = connection.execute(
+            """
+            SELECT
+                case_id,
+                attempt_index,
+                error_message,
+                response_text,
+                parse_mode,
+                parse_reason
+            FROM llm_attempts
+            ORDER BY id
+            """
+        )
+        for row in cursor:
+            yield dict(row)
 
     def _require_connection(self) -> sqlite3.Connection:
         if self.connection is None:

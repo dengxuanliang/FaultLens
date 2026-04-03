@@ -135,14 +135,18 @@ def join_records(inference_path: Path, results_path: Path) -> List[Dict[str, Any
 
 
 
-def join_records_iter(inference_path: Path, results_path: Path) -> Iterator[Dict[str, Any]]:
+def join_records_iter(
+    inference_path: Path,
+    results_path: Path,
+    *,
+    store: RunStore | None = None,
+) -> Iterator[Dict[str, Any]]:
     with NamedTemporaryFile(prefix="faultlens-join-", suffix=".sqlite3") as handle:
         connection = sqlite3.connect(handle.name)
         try:
             connection.execute("CREATE TABLE records (side TEXT NOT NULL, join_key TEXT NOT NULL, line_number INTEGER NOT NULL, payload_json TEXT NOT NULL, PRIMARY KEY(side, join_key))")
-            all_loader_warnings: List[str] = []
-            inference_dups = _stream_into_index(connection, Path(inference_path), "inference", "id", all_loader_warnings)
-            results_dups = _stream_into_index(connection, Path(results_path), "results", "task_id", all_loader_warnings)
+            inference_dups = _stream_into_index(connection, Path(inference_path), "inference", "id", store)
+            results_dups = _stream_into_index(connection, Path(results_path), "results", "task_id", store)
 
             query = """
                 SELECT keys.join_key,
@@ -159,24 +163,42 @@ def join_records_iter(inference_path: Path, results_path: Path) -> Iterator[Dict
             """
             for join_key, inf_line, inf_payload, res_line, res_payload in connection.execute(query):
                 if inf_payload is None or res_payload is None:
-                    case = _build_join_issue_case(str(join_key), f"missing pair for key {join_key}")
+                    reason = f"missing pair for key {join_key}"
+                    case = _build_join_issue_case(str(join_key), reason)
+                    _record_ingest_event(
+                        store,
+                        source_path=None,
+                        line_number=None,
+                        severity="warning",
+                        event_type="missing_pair",
+                        message=reason,
+                        payload_excerpt=str(join_key),
+                    )
                 elif str(join_key) in inference_dups or str(join_key) in results_dups:
-                    case = _build_join_issue_case(str(join_key), f"duplicate join key {join_key}")
+                    reason = f"duplicate join key {join_key}"
+                    case = _build_join_issue_case(str(join_key), reason)
+                    _record_ingest_event(
+                        store,
+                        source_path=None,
+                        line_number=None,
+                        severity="warning",
+                        event_type="duplicate_join_key",
+                        message=reason,
+                        payload_excerpt=str(join_key),
+                    )
                 else:
                     case = _build_joined_case(
                         str(join_key),
                         JsonlRecord(line_number=int(inf_line), data=json.loads(inf_payload)),
                         JsonlRecord(line_number=int(res_line), data=json.loads(res_payload)),
                     )
-                if all_loader_warnings:
-                    case["normalization"]["warnings"].extend(all_loader_warnings)
                 yield case
         finally:
             connection.close()
 
 
 def build_ingest_snapshot(store: RunStore, inference_path: Path, results_path: Path) -> None:
-    for case in join_records_iter(inference_path, results_path):
+    for case in join_records_iter(inference_path, results_path, store=store):
         store.record_joined_case(case)
         store.ensure_analysis_job(case_id=str(case.get("case_id")), job_status="ingested")
 
@@ -186,15 +208,29 @@ def iter_joined_cases_from_store(store: RunStore) -> Iterator[Dict[str, Any]]:
 
 
 
-def _stream_into_index(connection: sqlite3.Connection, path: Path, side: str, key_name: str, warnings: List[str]) -> set[str]:
+def _stream_into_index(
+    connection: sqlite3.Connection,
+    path: Path,
+    side: str,
+    key_name: str,
+    store: RunStore | None,
+) -> set[str]:
     duplicates: set[str] = set()
     for item in iter_jsonl_records(path):
         if isinstance(item, str):
-            warnings.append(item)
+            _record_loader_warning(store, path, side, item)
             continue
         key = _stringify(item.data.get(key_name))
         if key is None:
-            warnings.append(f"{side} missing {key_name} at line {item.line_number}")
+            _record_ingest_event(
+                store,
+                source_path=str(path),
+                line_number=item.line_number,
+                severity="warning",
+                event_type="missing_join_key",
+                message=f"{side} missing {key_name} at line {item.line_number}",
+                payload_excerpt=json.dumps(item.data, ensure_ascii=False)[:400],
+            )
             continue
         try:
             connection.execute(
@@ -203,6 +239,65 @@ def _stream_into_index(connection: sqlite3.Connection, path: Path, side: str, ke
             )
         except sqlite3.IntegrityError:
             duplicates.add(key)
-            warnings.append(f"duplicate {side} key {key}")
+            _record_ingest_event(
+                store,
+                source_path=str(path),
+                line_number=item.line_number,
+                severity="warning",
+                event_type="duplicate_join_key",
+                message=f"duplicate {side} key {key}",
+                payload_excerpt=str(key),
+            )
     connection.commit()
     return duplicates
+
+
+def _record_loader_warning(store: RunStore | None, path: Path, side: str, warning: str) -> None:
+    _record_ingest_event(
+        store,
+        source_path=str(path),
+        line_number=_extract_line_number(warning),
+        severity="warning",
+        event_type=_classify_warning_event(warning),
+        message=warning,
+        payload_excerpt=side,
+    )
+
+
+def _record_ingest_event(
+    store: RunStore | None,
+    *,
+    source_path: str | None,
+    line_number: int | None,
+    severity: str,
+    event_type: str,
+    message: str,
+    payload_excerpt: str | None,
+) -> None:
+    if store is None:
+        return
+    store.record_ingest_event(
+        source_path=source_path,
+        line_number=line_number,
+        severity=severity,
+        event_type=event_type,
+        message=message,
+        payload_excerpt=payload_excerpt,
+    )
+
+
+def _extract_line_number(message: str) -> int | None:
+    if "line " not in message:
+        return None
+    suffix = message.split("line ", 1)[1].split(" ", 1)[0]
+    return int(suffix) if suffix.isdigit() else None
+
+
+def _classify_warning_event(message: str) -> str:
+    if message.startswith("empty line "):
+        return "empty_line"
+    if message.startswith("bad json at line "):
+        return "bad_json"
+    if message.startswith("non-object json at line "):
+        return "non_object_json"
+    return "schema_outlier"
