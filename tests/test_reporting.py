@@ -1,12 +1,6 @@
 from faultlens.models import AttributionResult
 from faultlens.reporting.aggregate import summarize_cases
-from faultlens.reporting.render import (
-    _display_width,
-    _format_bar_lines,
-    render_analysis_report,
-    render_case_report,
-    render_hierarchical_root_cause_report,
-)
+from faultlens.reporting.render import render_analysis_report, render_case_report, render_hierarchical_root_cause_report
 
 
 def make_result(
@@ -108,9 +102,9 @@ def test_render_reports_contain_required_sections():
     assert "# 输入警告" in report
     assert "# LLM 警告" in report
     assert "结论：" in report
-    assert "█" in report
-    assert "| 类别 | 数量 | 占整体错题比例 |" in report
-    assert "| 待复核数量 | 占整体错题比例 | Case IDs |" in report
+    assert "●●●●●●●●●●" in report or "●●●●●○○○○○" in report or "●●○○○○○○○○" in report
+    assert "| 类别 | 数量 | 占整体错题比例 | 图示 |" in report
+    assert "| 待复核数量 | 占整体错题比例 | 图示 | Case IDs |" in report
     assert "100.0%" in report
     assert "# 三层错因总览" in hierarchy_report
     assert "# 方法说明" in hierarchy_report
@@ -141,17 +135,3 @@ def test_render_reports_contain_required_sections():
     assert "## 警告" in case_report
     assert "## 解释" in case_report
     assert "logic mismatch" in case_report
-
-
-def test_bar_lines_align_bar_start_for_cjk_labels():
-    lines = _format_bar_lines(
-        [
-            ("API 不匹配", 2),
-            ("入口不匹配", 2),
-            ("疑似评测不一致", 1),
-        ],
-        total=4,
-    )
-
-    starts = [_display_width(line[: line.index("█")]) for line in lines]
-    assert len(set(starts)) == 1

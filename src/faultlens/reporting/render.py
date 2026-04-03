@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from io import StringIO
-import unicodedata
 
 from faultlens.attribution.hierarchy import L1_LABELS, L2_LABELS, L3_LABELS
 from faultlens.models import AttributionResult, SummaryReport
@@ -241,9 +240,9 @@ def _format_hierarchy_summary(summary: SummaryReport, *, total: int) -> str:
 def _format_count_share_table(rows: list[tuple[str, int]], *, total: int) -> str:
     if not rows:
         return "- 无"
-    lines = ["| 类别 | 数量 | 占整体错题比例 |", "| --- | --- | --- |"]
+    lines = ["| 类别 | 数量 | 占整体错题比例 | 图示 |", "| --- | --- | --- | --- |"]
     for label, count in _sort_rows(rows):
-        lines.append(f"| {label} | {count} | {_format_percent(count, total)} |")
+        lines.append(f"| {label} | {count} | {_format_percent(count, total)} | {_make_bar(count, total)} |")
     return "\n".join(lines)
 
 
@@ -257,18 +256,16 @@ def _format_review_queue_summary(case_ids: list[str], *, total: int) -> str:
     if not case_ids:
         return (
             "结论：当前没有样本进入人工复核。\n\n"
-            "待人工复核        0  (0.0%)\n\n"
-            "| 待复核数量 | 占整体错题比例 | Case IDs |\n| --- | --- | --- |\n| 0 | 0.0% | 无 |"
+            "| 待复核数量 | 占整体错题比例 | 图示 | Case IDs |\n| --- | --- | --- | --- |\n| 0 | 0.0% |  | 无 |"
         )
     joined = ", ".join(str(case_id) for case_id in case_ids)
     count = len(case_ids)
     percent = _format_percent(count, total)
     return (
         f"结论：当前共有 {count} 个样本进入人工复核，占整体错题 {percent}。\n\n"
-        f"待人工复核        {count}  ({percent})  {_make_bar(count, total)}\n\n"
-        "| 待复核数量 | 占整体错题比例 | Case IDs |\n"
-        "| --- | --- | --- |\n"
-        f"| {count} | {percent} | {joined} |"
+        "| 待复核数量 | 占整体错题比例 | 图示 | Case IDs |\n"
+        "| --- | --- | --- | --- |\n"
+        f"| {count} | {percent} | {_make_bar(count, total)} | {joined} |"
     )
 
 
@@ -276,10 +273,7 @@ def _format_distribution_block(rows: list[tuple[str, int]], *, total: int) -> st
     if not rows:
         return "- 无"
     sorted_rows = _sort_rows(rows)
-    lines = [_build_distribution_conclusion(sorted_rows, total), ""]
-    lines.extend(_format_bar_lines(sorted_rows, total))
-    lines.extend(["", _format_count_share_table(sorted_rows, total=total)])
-    return "\n".join(lines)
+    return "\n".join([_build_distribution_conclusion(sorted_rows, total), "", _format_count_share_table(sorted_rows, total=total)])
 
 
 def _build_distribution_conclusion(rows: list[tuple[str, int]], total: int) -> str:
@@ -298,41 +292,16 @@ def _build_distribution_conclusion(rows: list[tuple[str, int]], total: int) -> s
     return f"结论：当前最高频类别为 {leader_text}，并列占整体错题 {top_percent}。"
 
 
-def _format_bar_lines(rows: list[tuple[str, int]], total: int) -> list[str]:
-    if not rows:
-        return []
-    label_width = max(_display_width(label) for label, _ in rows)
-    lines = []
-    for label, count in rows:
-        percent = _format_percent(count, total)
-        bar = _make_bar(count, total)
-        lines.append(f"{_pad_display_width(label, label_width)}  {count}  ({percent})  {bar}".rstrip())
-    return lines
-
-
 def _make_bar(count: int, total: int, *, width: int = 20) -> str:
     if total <= 0 or count <= 0:
         return ""
-    filled = max(1, round((count / total) * width))
-    return "█" * filled
+    steps = max(1, width // 2)
+    filled = max(1, round((count / total) * steps))
+    return ("●" * filled) + ("○" * max(0, steps - filled))
 
 
 def _sort_rows(rows: list[tuple[str, int]]) -> list[tuple[str, int]]:
     return sorted(rows, key=lambda item: (-item[1], item[0]))
-
-
-def _display_width(text: str) -> int:
-    width = 0
-    for char in text:
-        if unicodedata.combining(char):
-            continue
-        width += 2 if unicodedata.east_asian_width(char) in {"F", "W"} else 1
-    return width
-
-
-def _pad_display_width(text: str, target_width: int) -> str:
-    padding = max(0, target_width - _display_width(text))
-    return text + (" " * padding)
 
 
 def _format_hierarchy_subtypes(summary: SummaryReport) -> str:

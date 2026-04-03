@@ -49,9 +49,9 @@ def test_cli_analyze_generates_outputs(tmp_path: Path, fixtures_dir: Path):
     assert "# 代表性案例" in report_text
     assert "# 待人工复核" in report_text
     assert "结论：" in report_text
-    assert "█" in report_text
-    assert "| 类别 | 数量 | 占整体错题比例 |" in report_text
-    assert "| 待复核数量 | 占整体错题比例 | Case IDs |" in report_text
+    assert "●●●●●○○○○○" in report_text or "●●○○○○○○○○" in report_text
+    assert "| 类别 | 数量 | 占整体错题比例 | 图示 |" in report_text
+    assert "| 待复核数量 | 占整体错题比例 | 图示 | Case IDs |" in report_text
     assert "%" in report_text
 
     case_text = (output_dir / "cases" / "2.md").read_text(encoding="utf-8")
