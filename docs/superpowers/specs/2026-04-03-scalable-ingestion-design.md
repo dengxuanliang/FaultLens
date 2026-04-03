@@ -119,6 +119,7 @@
 
 - `run.db`
 - `input_manifest.json`
+- `analysis_manifest.json`
 - `case_analysis.jsonl`
 - `analysis_report.md`
 - `summary.json`
@@ -205,6 +206,31 @@
 - `sha256`
 - `sample_record_count`
 - `created_at`
+
+`input_manifest.json` 需要同步保存同样的关键信息，作为 resume 前的人类可读核对材料。
+
+### 6.1.1 `run_metadata`
+
+用途：
+
+- 保存本次 run 的全局配置和版本快照
+
+建议字段：
+
+- `run_id`
+- `created_at`
+- `faultlens_version`
+- `schema_version`
+- `analysis_version`
+- `prompt_version`
+- `settings_json`
+- `git_commit`
+
+说明：
+
+- `analysis_version` 用于标识 deterministic 分析逻辑版本
+- `prompt_version` 用于标识当前 LLM prompt 契约版本
+- 当这些版本发生变化时，可以决定是拒绝 resume，还是仅重跑受影响阶段
 
 ### 6.2 `ingest_events`
 
@@ -407,9 +433,13 @@
 当用户使用 `--resume` 时：
 
 - 若 `run.db` 已存在，则优先从数据库恢复，而不是重扫原始输入文件
+- 先比对 `input_files` 与 `input_manifest.json` 中的文件指纹，若路径、大小、mtime 或 sha256 发生变化，则默认拒绝 resume
+- 先比对 `run_metadata.analysis_version` 与 `run_metadata.prompt_version`，若当前代码版本和数据库快照不一致，则默认拒绝直接复用旧结果
 - 所有 `finalized` case 直接跳过
 - 对 `llm_running` 中 lease 已过期的任务做回收
 - 对 `llm_failed_retryable` 且已到 `next_retry_at` 的任务重新入队
+
+只有在输入快照和分析版本都一致时，resume 才应被视为安全。
 
 ### 8.2 Lease 机制
 
@@ -448,6 +478,7 @@
 - ingest 时把 inference/results 按 join key 写入数据库
 - 只在本次 run 的开始阶段做一次完整 join
 - 后续 resume 和汇总都不再重新 join 原始文件
+- 批量插入阶段应使用事务提交，避免每条记录单独 commit
 
 ### 9.3 LLM 吞吐控制
 
@@ -510,6 +541,18 @@
 - `finalize_outputs(...)`
 - `resume_run(...)`
 
+### 10.3 新增清单
+
+建议新增：
+
+- `src/faultlens/scale/run_store.py`
+- `src/faultlens/scale/schema.py`
+
+其中：
+
+- `run_store.py` 负责数据库读写、事务和状态流转
+- `schema.py` 负责初始化表结构与 schema version
+
 ## 11. 错误处理
 
 ### 11.1 输入错误
@@ -552,6 +595,10 @@
 5. **Finalize 幂等测试**
    - 重复执行 finalize
    - 输出不重复、不损坏
+
+6. **resume 安全性测试**
+   - 输入文件指纹变化时拒绝 resume
+   - `analysis_version` 或 `prompt_version` 变化时拒绝直接复用旧结果
 
 ## 13. 迁移策略
 
