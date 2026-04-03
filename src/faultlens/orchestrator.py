@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
+from datetime import UTC, datetime, timedelta
 import hashlib
 import json
 from pathlib import Path
 import shutil
+import uuid
 from typing import Any, Dict, Iterable, Iterator, Optional
 
 from faultlens.attribution.engine import build_final_case_result
@@ -30,6 +32,7 @@ from faultlens.scale.run_store import RunStore
 
 
 ANALYSIS_VERSION = "deterministic-v2"
+LLM_LEASE_SECONDS = 300
 
 
 
@@ -52,6 +55,7 @@ def run_analysis(
             analysis_version=ANALYSIS_VERSION,
             prompt_version=PROMPT_VERSION,
         )
+        run_store.requeue_expired_leases(now=_utcnow_iso())
     else:
         run_store.initialize_run_metadata(
             analysis_version=ANALYSIS_VERSION,
@@ -119,8 +123,24 @@ def run_analysis(
                     warnings=list(analyzed.get("failure_gate_warnings", [])) + list(analyzed.get("deterministic_findings", {}).get("runner_warnings", [])),
                     root_cause_hint=analyzed.get("deterministic_root_cause_hint"),
                 )
+                llm_required = bool(record.eligible_for_llm and llm_enabled)
+                run_store.save_deterministic_result(
+                    case_id=record.case_id,
+                    case_status=record.case_status,
+                    failure_gate_warnings=list(analyzed.get("failure_gate_warnings", [])),
+                    deterministic_signals=list(analyzed.get("deterministic_signals", [])),
+                    deterministic_findings=dict(analyzed.get("deterministic_findings", {})),
+                    deterministic_root_cause_hint=analyzed.get("deterministic_root_cause_hint"),
+                    analysis_version=ANALYSIS_VERSION,
+                )
+                run_store.update_job_after_deterministic(
+                    case_id=record.case_id,
+                    job_status="llm_pending" if llm_required else "deterministic_done",
+                    eligible_for_llm=record.eligible_for_llm,
+                    llm_required=llm_required,
+                )
 
-                if record.eligible_for_llm and llm_enabled:
+                if llm_required:
                     batch.append({"case": analyzed, "record": record, "findings": findings})
                     if len(batch) >= max(1, settings.llm_max_workers * 2):
                         _flush_llm_batch(
@@ -134,6 +154,7 @@ def run_analysis(
                             result_handle=result_handle,
                             checkpoint=checkpoint,
                             llm_raw_responses_dir=llm_raw_responses_dir,
+                            run_store=run_store,
                         )
                         batch = []
                 else:
@@ -163,6 +184,7 @@ def run_analysis(
                     result_handle=result_handle,
                     checkpoint=checkpoint,
                     llm_raw_responses_dir=llm_raw_responses_dir,
+                    run_store=run_store,
                 )
 
     if llm_response_stats["attempted"]:
@@ -272,6 +294,14 @@ def _build_input_snapshots(input_paths: list[Path], detected_roles: Dict[str, st
     return snapshots
 
 
+def _utcnow_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _future_iso(*, seconds: int) -> str:
+    return (datetime.now(UTC) + timedelta(seconds=seconds)).isoformat()
+
+
 
 def _flush_llm_batch(
     *,
@@ -285,24 +315,72 @@ def _flush_llm_batch(
     result_handle,
     checkpoint: CheckpointStore,
     llm_raw_responses_dir: Path,
+    run_store: RunStore,
 ) -> None:
-    cases = [item["case"] for item in batch]
-    results = list(executor.map(lambda current: _run_llm_case(current, settings), cases))
-    for item, llm_outcome in zip(batch, results):
+    prepared_batch: list[dict[str, Any]] = []
+    for item in batch:
+        messages = build_attribution_messages(item["case"])
+        started_at = _utcnow_iso()
+        lease_token = str(uuid.uuid4())
+        lease_until = _future_iso(seconds=LLM_LEASE_SECONDS)
+        current_job = run_store.get_job(item["record"].case_id)
+        attempt_index = int(current_job.get("attempt_count") or 0) + 1
+        run_store.mark_job_llm_running(
+            case_id=item["record"].case_id,
+            lease_token=lease_token,
+            lease_until=lease_until,
+        )
+        prepared_batch.append(
+            {
+                **item,
+                "messages": messages,
+                "started_at": started_at,
+                "attempt_index": attempt_index,
+            }
+        )
+    results = list(executor.map(lambda current: _run_llm_case(current["messages"], settings), prepared_batch))
+    for item, llm_outcome in zip(prepared_batch, results):
         llm_result, warning, parse_info = llm_outcome
+        finished_at = _utcnow_iso()
         _persist_llm_raw_response(llm_raw_responses_dir, item["record"].case_id, parse_info)
         _update_llm_stats(llm_response_stats, item["record"].case_id, parse_info)
+        run_store.record_llm_attempt(
+            case_id=item["record"].case_id,
+            attempt_index=item["attempt_index"],
+            request_messages=item["messages"],
+            provider_model=settings.model,
+            provider_base_url=settings.base_url,
+            started_at=item["started_at"],
+            finished_at=finished_at,
+            outcome=parse_info.get("status") or ("completed" if llm_result else "unknown"),
+            parse_mode=parse_info.get("status"),
+            parse_reason=parse_info.get("invalid_reason"),
+            response_text=parse_info.get("raw_response_text"),
+            response_sha256=parse_info.get("raw_response_sha256"),
+            error_type=parse_info.get("error_type"),
+            error_message=warning,
+            http_status=parse_info.get("http_status"),
+            is_selected=bool(llm_result),
+        )
         if warning:
             llm_warnings.append(warning)
+        if llm_result:
+            run_store.mark_job_llm_done(item["record"].case_id)
+        else:
+            run_store.mark_job_llm_failed(
+                case_id=item["record"].case_id,
+                retryable=False,
+                last_error=warning or parse_info.get("invalid_reason"),
+            )
         result = build_final_case_result(item["record"], item["findings"], llm_result, llm_parse_info=parse_info)
         _persist_result(result, summary_accumulator, case_status_counts, result_handle, checkpoint, llm_warnings, llm_response_stats)
 
 
 
-def _run_llm_case(case: Dict[str, Any], settings: Settings) -> tuple[Optional[Dict[str, Any]], Optional[str], Dict[str, Any]]:
+def _run_llm_case(messages: list[dict[str, str]], settings: Settings) -> tuple[Optional[Dict[str, Any]], Optional[str], Dict[str, Any]]:
     client = LLMClient(settings)
     try:
-        llm_result = client.complete_json(build_attribution_messages(case))
+        llm_result = client.complete_json(messages)
     except Exception as exc:  # noqa: BLE001
         return None, f"llm unavailable: {exc}", {"status": "request_error", "invalid_reason": type(exc).__name__, "raw_response_excerpt": None, "raw_response_path": None, "raw_response_sha256": None}
     return llm_result, client.last_warning, dict(client.last_completion_info)

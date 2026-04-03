@@ -334,6 +334,342 @@ class RunStore:
             ).fetchone()
         return int(row["value"])
 
+    def update_job_after_deterministic(
+        self,
+        *,
+        case_id: str,
+        job_status: str,
+        eligible_for_llm: bool,
+        llm_required: bool,
+    ) -> None:
+        connection = self._require_connection()
+        connection.execute(
+            """
+            UPDATE analysis_jobs
+            SET job_status = ?,
+                eligible_for_llm = ?,
+                deterministic_ready = 1,
+                llm_required = ?,
+                updated_at = ?
+            WHERE case_id = ?
+            """,
+            (job_status, int(eligible_for_llm), int(llm_required), _utcnow_iso(), case_id),
+        )
+        connection.commit()
+
+    def save_deterministic_result(
+        self,
+        *,
+        case_id: str,
+        case_status: str,
+        failure_gate_warnings: list[str],
+        deterministic_signals: list[str],
+        deterministic_findings: dict[str, Any],
+        deterministic_root_cause_hint: str | None,
+        analysis_version: str,
+    ) -> None:
+        connection = self._require_connection()
+        now = _utcnow_iso()
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO deterministic_results(
+                case_id,
+                case_status,
+                failure_gate_warnings_json,
+                deterministic_signals_json,
+                deterministic_findings_json,
+                deterministic_root_cause_hint,
+                runner_warnings_json,
+                analysis_version,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT created_at FROM deterministic_results WHERE case_id = ?), ?), ?)
+            """,
+            (
+                case_id,
+                case_status,
+                json.dumps(failure_gate_warnings, ensure_ascii=False),
+                json.dumps(deterministic_signals, ensure_ascii=False),
+                json.dumps(deterministic_findings, ensure_ascii=False),
+                deterministic_root_cause_hint,
+                json.dumps(deterministic_findings.get("runner_warnings", []), ensure_ascii=False),
+                analysis_version,
+                case_id,
+                now,
+                now,
+            ),
+        )
+        connection.commit()
+
+    def get_deterministic_result(self, case_id: str) -> dict[str, Any]:
+        connection = self._require_connection()
+        row = connection.execute(
+            """
+            SELECT
+                case_id,
+                case_status,
+                failure_gate_warnings_json,
+                deterministic_signals_json,
+                deterministic_findings_json,
+                deterministic_root_cause_hint,
+                runner_warnings_json,
+                analysis_version,
+                created_at,
+                updated_at
+            FROM deterministic_results
+            WHERE case_id = ?
+            """,
+            (case_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(case_id)
+        result = dict(row)
+        result["failure_gate_warnings_json"] = json.loads(result["failure_gate_warnings_json"])
+        result["deterministic_signals_json"] = json.loads(result["deterministic_signals_json"])
+        result["deterministic_findings_json"] = json.loads(result["deterministic_findings_json"])
+        result["runner_warnings_json"] = json.loads(result["runner_warnings_json"])
+        return result
+
+    def get_job(self, case_id: str) -> dict[str, Any]:
+        connection = self._require_connection()
+        row = connection.execute(
+            """
+            SELECT
+                case_id,
+                job_status,
+                eligible_for_llm,
+                deterministic_ready,
+                llm_required,
+                attempt_count,
+                next_retry_at,
+                worker_lease_token,
+                worker_lease_until,
+                last_error,
+                created_at,
+                updated_at
+            FROM analysis_jobs
+            WHERE case_id = ?
+            """,
+            (case_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(case_id)
+        return dict(row)
+
+    def update_job_lease(self, *, case_id: str, lease_token: str | None, lease_until: str | None) -> None:
+        connection = self._require_connection()
+        connection.execute(
+            """
+            UPDATE analysis_jobs
+            SET worker_lease_token = ?,
+                worker_lease_until = ?,
+                updated_at = ?
+            WHERE case_id = ?
+            """,
+            (lease_token, lease_until, _utcnow_iso(), case_id),
+        )
+        connection.commit()
+
+    def mark_job_llm_running(self, *, case_id: str, lease_token: str, lease_until: str) -> None:
+        connection = self._require_connection()
+        connection.execute(
+            """
+            UPDATE analysis_jobs
+            SET job_status = 'llm_running',
+                attempt_count = attempt_count + 1,
+                worker_lease_token = ?,
+                worker_lease_until = ?,
+                updated_at = ?
+            WHERE case_id = ?
+            """,
+            (lease_token, lease_until, _utcnow_iso(), case_id),
+        )
+        connection.commit()
+
+    def mark_job_llm_done(self, case_id: str) -> None:
+        connection = self._require_connection()
+        connection.execute(
+            """
+            UPDATE analysis_jobs
+            SET job_status = 'llm_done',
+                worker_lease_token = NULL,
+                worker_lease_until = NULL,
+                updated_at = ?
+            WHERE case_id = ?
+            """,
+            (_utcnow_iso(), case_id),
+        )
+        connection.commit()
+
+    def mark_job_llm_failed(
+        self,
+        *,
+        case_id: str,
+        retryable: bool,
+        last_error: str | None,
+        next_retry_at: str | None = None,
+    ) -> None:
+        connection = self._require_connection()
+        connection.execute(
+            """
+            UPDATE analysis_jobs
+            SET job_status = ?,
+                next_retry_at = ?,
+                last_error = ?,
+                worker_lease_token = NULL,
+                worker_lease_until = NULL,
+                updated_at = ?
+            WHERE case_id = ?
+            """,
+            (
+                "llm_failed_retryable" if retryable else "llm_failed_terminal",
+                next_retry_at,
+                last_error,
+                _utcnow_iso(),
+                case_id,
+            ),
+        )
+        connection.commit()
+
+    def mark_job_finalized(self, case_id: str) -> None:
+        connection = self._require_connection()
+        connection.execute(
+            """
+            UPDATE analysis_jobs
+            SET job_status = 'finalized',
+                worker_lease_token = NULL,
+                worker_lease_until = NULL,
+                updated_at = ?
+            WHERE case_id = ?
+            """,
+            (_utcnow_iso(), case_id),
+        )
+        connection.commit()
+
+    def record_llm_attempt(
+        self,
+        *,
+        case_id: str,
+        attempt_index: int,
+        request_messages: list[dict[str, str]],
+        provider_model: str | None,
+        provider_base_url: str | None,
+        started_at: str,
+        finished_at: str,
+        outcome: str,
+        parse_mode: str | None,
+        parse_reason: str | None,
+        response_text: str | None,
+        response_sha256: str | None,
+        error_type: str | None,
+        error_message: str | None,
+        http_status: int | None,
+        is_selected: bool = True,
+    ) -> int:
+        connection = self._require_connection()
+        request_messages_json = json.dumps(request_messages, ensure_ascii=False, sort_keys=True)
+        request_sha256 = hashlib.sha256(request_messages_json.encode("utf-8")).hexdigest()
+        latency_ms = max(
+            0,
+            int((datetime.fromisoformat(finished_at) - datetime.fromisoformat(started_at)).total_seconds() * 1000),
+        )
+        cursor = connection.execute(
+            """
+            INSERT INTO llm_attempts(
+                case_id,
+                attempt_index,
+                request_messages_json,
+                request_sha256,
+                provider_model,
+                provider_base_url,
+                http_status,
+                started_at,
+                finished_at,
+                latency_ms,
+                outcome,
+                error_type,
+                error_message,
+                response_text,
+                response_sha256,
+                parse_mode,
+                parse_reason,
+                is_selected
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                case_id,
+                attempt_index,
+                request_messages_json,
+                request_sha256,
+                provider_model,
+                provider_base_url,
+                http_status,
+                started_at,
+                finished_at,
+                latency_ms,
+                outcome,
+                error_type,
+                error_message,
+                response_text,
+                response_sha256,
+                parse_mode,
+                parse_reason,
+                int(is_selected),
+            ),
+        )
+        connection.commit()
+        return int(cursor.lastrowid)
+
+    def list_llm_attempts(self, case_id: str) -> list[dict[str, Any]]:
+        connection = self._require_connection()
+        rows = connection.execute(
+            """
+            SELECT
+                id,
+                case_id,
+                attempt_index,
+                request_messages_json,
+                request_sha256,
+                provider_model,
+                provider_base_url,
+                http_status,
+                started_at,
+                finished_at,
+                latency_ms,
+                outcome,
+                error_type,
+                error_message,
+                response_text,
+                response_sha256,
+                parse_mode,
+                parse_reason,
+                is_selected
+            FROM llm_attempts
+            WHERE case_id = ?
+            ORDER BY attempt_index, id
+            """,
+            (case_id,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def requeue_expired_leases(self, *, now: str) -> int:
+        connection = self._require_connection()
+        cursor = connection.execute(
+            """
+            UPDATE analysis_jobs
+            SET job_status = 'llm_pending',
+                worker_lease_token = NULL,
+                worker_lease_until = NULL,
+                updated_at = ?
+            WHERE job_status = 'llm_running'
+              AND worker_lease_until IS NOT NULL
+              AND worker_lease_until < ?
+            """,
+            (now, now),
+        )
+        connection.commit()
+        return int(cursor.rowcount)
+
     def _require_connection(self) -> sqlite3.Connection:
         if self.connection is None:
             raise RuntimeError("run store is not open")

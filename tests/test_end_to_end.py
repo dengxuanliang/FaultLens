@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from faultlens.cli import main
+from faultlens.scale.run_store import RunStore
 
 
 def test_cli_analyze_generates_outputs(tmp_path: Path, fixtures_dir: Path):
@@ -100,6 +101,35 @@ def test_cli_survives_llm_failure_and_falls_back(tmp_path: Path, fixtures_dir: P
     report_text = (output_dir / "analysis_report.md").read_text(encoding="utf-8")
     assert "# 输入警告" in report_text
     assert "# LLM 警告" in report_text
+
+
+def test_cli_persists_deterministic_results_in_run_store(tmp_path: Path, fixtures_dir: Path):
+    output_dir = tmp_path / "outputs"
+
+    exit_code = main(
+        [
+            "analyze",
+            "--input",
+            str(fixtures_dir / "inference_sample.jsonl"),
+            str(fixtures_dir / "results_sample.jsonl"),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+
+    store = RunStore(output_dir / "run.db").open()
+    try:
+        row = store.get_deterministic_result("2")
+        job = store.get_job("2")
+    finally:
+        store.close()
+
+    assert row["case_status"] == "attributable_failure"
+    assert "logic_mismatch" in row["deterministic_signals_json"]
+    assert job["job_status"] in {"deterministic_done", "llm_pending", "llm_done", "llm_failed_terminal", "finalized"}
+    assert job["deterministic_ready"] == 1
 
 
 def test_cli_records_invalid_llm_response_stats_without_blocking(tmp_path: Path, fixtures_dir: Path, monkeypatch):
@@ -272,6 +302,64 @@ Improvement Hints:
     raw_response_path = output_dir / "llm_raw_responses" / "2.txt"
     assert raw_response_path.exists()
     assert raw_response_path.read_text(encoding="utf-8") == raw_response
+
+
+def test_cli_persists_llm_attempt_audit_records(tmp_path: Path, fixtures_dir: Path, monkeypatch):
+    output_dir = tmp_path / "outputs"
+
+    class FakeClient:
+        def __init__(self, settings):
+            self.enabled = True
+            self.last_warning = None
+            self.last_completion_info = {
+                "status": "strict_json",
+                "invalid_reason": None,
+                "raw_response_excerpt": '{"root_cause":"solution_incorrect"}',
+                "raw_response_text": '{"root_cause":"solution_incorrect","explanation":"logic mismatch"}',
+                "raw_response_sha256": "abc123",
+            }
+
+        def complete_json(self, messages):
+            return {
+                "root_cause": "solution_incorrect",
+                "explanation": "logic mismatch",
+                "observable_evidence": ["assert failed"],
+                "improvement_hints": ["compare against reference"],
+                "llm_signals": ["json"],
+                "evidence_refs": [{"source": "tests"}],
+            }
+
+    monkeypatch.setattr("faultlens.orchestrator.LLMClient", FakeClient)
+
+    exit_code = main([
+        "analyze",
+        "--input",
+        str(fixtures_dir / "inference_sample.jsonl"),
+        str(fixtures_dir / "results_sample.jsonl"),
+        "--output-dir",
+        str(output_dir),
+        "--api-key",
+        "k",
+        "--base-url",
+        "http://invalid.local",
+        "--model",
+        "m",
+    ])
+
+    assert exit_code == 0
+
+    store = RunStore(output_dir / "run.db").open()
+    try:
+        attempts = store.list_llm_attempts("2")
+        job = store.get_job("2")
+    finally:
+        store.close()
+
+    assert len(attempts) == 1
+    assert '"role": "system"' in attempts[0]["request_messages_json"]
+    assert "logic mismatch" in attempts[0]["response_text"]
+    assert attempts[0]["parse_mode"] == "strict_json"
+    assert job["job_status"] in {"llm_done", "finalized"}
 
 
 def test_case_output_persists_request_error_response_body(tmp_path: Path, fixtures_dir: Path, monkeypatch):

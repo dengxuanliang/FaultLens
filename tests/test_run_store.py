@@ -80,3 +80,21 @@ def test_run_store_rejects_changed_input_manifest(tmp_path: Path) -> None:
             raise AssertionError("expected input manifest mismatch")
     finally:
         store.close()
+
+
+def test_run_store_requeues_expired_llm_jobs(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "run.db").open()
+    try:
+        store.ensure_analysis_job(case_id="2", job_status="llm_running")
+        store.update_job_lease(
+            case_id="2",
+            lease_token="lease-1",
+            lease_until="2000-01-01T00:00:00+00:00",
+        )
+        store.requeue_expired_leases(now="2026-04-03T00:00:00+00:00")
+        job = store.get_job("2")
+    finally:
+        store.close()
+
+    assert job["job_status"] == "llm_pending"
+    assert job["worker_lease_token"] is None
