@@ -2,11 +2,22 @@
 
 FaultLens is a deterministic-first CLI agent for paired code-evaluation JSONL analysis.
 
+## Project goal
+
+FaultLens is built around two delivery goals:
+
+- read paired evaluation-log JSONL inputs and automatically analyze wrong-answer causes plus capability weaknesses
+- stably process runs up to 2000 cases, persist progress locally, and resume safely after interruption
+
+The current implementation treats `run.db` as the durable source of truth for ingest, deterministic analysis, LLM attribution, final results, resume, and rerender.
+
 ## What it does
+
+FaultLens provides the following core capabilities:
 
 - detects which input file is inference-side and which is results-side
 - joins records on `inference.id == results.task_id`
-- finds failed cases
+- identifies failed cases and separates attributable failures from data/join issues
 - extracts generated code from `completion`
 - runs deterministic analysis first:
   - language inference
@@ -14,9 +25,22 @@ FaultLens is a deterministic-first CLI agent for paired code-evaluation JSONL an
   - compile / test execution when supported and sandboxed
   - harness/signature alignment checks
   - canonical/reference diff summaries
-- optionally calls an LLM for higher-level attribution
-- writes batch + single-case markdown reports plus structured JSON outputs
+- optionally calls an LLM for higher-level root-cause attribution
+- aggregates wrong-answer causes into three-layer cause/capability views for reporting
+- writes batch reports, per-case markdown reports, structured JSON outputs, and raw LLM evidence
 - persists a durable `run.db` state store so long runs can resume and rerender from local state
+
+## Acceptance status
+
+As of the current `main` branch, the core acceptance scope is implemented:
+
+- wrong-answer cause analysis: complete
+- deterministic + LLM attribution pipeline: complete
+- three-layer capability weakness aggregation: complete
+- durable resume after interruption: complete
+- rerender reports from persisted state: complete
+- 2000-case scale handling in tests: complete
+- retryable LLM failure capture with retry ceiling and backlog visibility: complete
 
 ## Inputs
 
@@ -34,6 +58,17 @@ Results-side records should include:
 - `task_id`
 - `accepted`
 - optional pass metrics and metadata tags
+
+## Recommended usage flow
+
+For production-style usage, treat FaultLens as a staged local pipeline:
+
+1. Run `analyze` on the paired JSONL files.
+2. Let FaultLens ingest records into `run.db`, run deterministic analysis, and attempt LLM attribution where enabled.
+3. If the process is interrupted, rerun the same `analyze ... --resume` command against the same inputs.
+4. If you only want to rebuild reports from existing state, run `rerender`.
+
+This means resume is driven by persisted task state inside `run.db`, not by rescanning outputs and trying to infer what was already finished.
 
 ## Quickstart
 
@@ -77,6 +112,29 @@ CLI flags:
 
 If LLM settings are absent or the endpoint is unavailable, FaultLens falls back to deterministic-only attribution and still writes reports.
 
+### Resume an interrupted run
+
+Use the exact same input files and output directory:
+
+```bash
+PYTHONPATH=src python3 -m faultlens.cli analyze \
+  --input path/to/file-a.jsonl path/to/file-b.jsonl \
+  --output-dir ./outputs \
+  --resume
+```
+
+Resume safety is checked against:
+
+- input path and declared order
+- detected role
+- file size and modification time
+- file sha256
+- sampled record count
+- analysis version
+- prompt version
+
+If any of these drift, FaultLens rejects resume instead of continuing unsafely.
+
 ### Rerender existing outputs
 
 If `run.db` already exists, you can rebuild reports without rescanning the source JSONL files:
@@ -109,6 +167,48 @@ Structured outputs include:
 
 If an LLM request fails with a provider response body, FaultLens persists that raw body into `llm_raw_responses/` for later manual audit.
 
+### Key output files
+
+- `analysis_report.md`: top-level delivery report, including case distribution, root-cause distribution, input warnings, LLM quality stats, and current job backlog
+- `hierarchical_root_cause_report.md`: three-layer cause and capability aggregation report
+- `case_analysis.jsonl`: machine-readable per-case final results
+- `cases/<case_id>.md`: detailed per-case analysis
+- `run_metadata.json`: run-level metadata for validation and operations
+- `run.db`: durable working state and the source of truth for resume/rerender
+
+### Job-state interpretation
+
+`run_metadata.json` and `analysis_report.md` expose `analysis_jobs` state counts.
+
+Important states:
+
+- `ingested`: data stored, deterministic stage not yet completed
+- `llm_pending`: deterministic stage finished and the case is waiting for LLM work
+- `llm_running`: the case is currently leased by an LLM worker
+- `llm_failed_retryable`: LLM failed in a retryable way and is waiting for the next retry window
+- `llm_failed_terminal`: LLM failed and will not be retried again
+- `finalized`: final result has been written
+
+`pending_llm_backlog` is the operational number to watch. It is the sum of:
+
+- `llm_pending`
+- `llm_running`
+- `llm_failed_retryable`
+
+If backlog is non-zero, the run still has unfinished or retry-waiting LLM work even if deterministic fallback results already exist.
+
+## Scaling and stability
+
+The current pipeline is designed for larger local runs:
+
+- joined cases, deterministic results, LLM attempts, and final results are persisted in SQLite
+- resume continues from persisted task state instead of recomputing completion by scanning old outputs
+- retryable LLM failures keep evidence and fallback results, then retry later within the configured retry budget
+- retryable jobs are capped by `llm_max_retries` and do not loop forever across resumed runs
+- tests cover a 2000-case run path with durable state handling
+
+This is the current intended operating model for long-running analysis batches.
+
 ## Language support
 
 V1 focuses on:
@@ -122,6 +222,22 @@ Current machine-dependent behavior:
 - Java and Go gracefully degrade when toolchains or runtime support are unavailable
 - runtime execution requires macOS `sandbox-exec`; when unavailable, execution is disabled and FaultLens degrades to static analysis for safety
 - execution uses a temporary workspace, sanitized environment, timeouts, truncated output capture, and cleanup
+
+## Known boundaries
+
+FaultLens is productized around durable local batch analysis, but the following boundaries still matter:
+
+- runtime execution quality depends on host toolchains and sandbox availability
+- LLM attribution quality still depends on upstream model behavior and endpoint stability
+- non-retryable LLM failures fall back to deterministic-only finalization
+- input resume validation is intentionally strict; modified source files require a fresh run
+
+## Verification
+
+The current repository state has full test verification on `main`:
+
+- `pytest -q`
+- latest verified result: `96 passed`
 
 ## Tests
 
