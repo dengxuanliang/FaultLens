@@ -12,12 +12,13 @@ from faultlens.attribution.engine import build_final_case_result
 from faultlens.config import Settings
 from faultlens.deterministic.pipeline import analyze_case_deterministically, analyze_cases_deterministically
 from faultlens.deterministic.runners.registry import build_runner_registry
+from faultlens.ingest.jsonl import sample_jsonl
 from faultlens.ingest.resolver import detect_input_roles
 from faultlens.llm.client import LLMClient
-from faultlens.llm.prompting import build_attribution_messages
+from faultlens.llm.prompting import PROMPT_VERSION, build_attribution_messages
 from faultlens.models import AttributionResult, CaseRecord, DeterministicFindings, EvaluationInfo, TaskInfo
 from faultlens.normalize.failure_gate import apply_failure_gate
-from faultlens.normalize.joiner import join_records_iter
+from faultlens.normalize.joiner import build_ingest_snapshot, iter_joined_cases_from_store
 from faultlens.reporting.aggregate import SummaryAccumulator
 from faultlens.reporting.render import (
     render_analysis_report,
@@ -25,6 +26,10 @@ from faultlens.reporting.render import (
     write_hierarchical_root_cause_report,
 )
 from faultlens.scale.checkpointing import CheckpointStore
+from faultlens.scale.run_store import RunStore
+
+
+ANALYSIS_VERSION = "deterministic-v2"
 
 
 
@@ -39,6 +44,41 @@ def run_analysis(
     resolved = detect_input_roles(input_paths)
 
     _prepare_output_dir(output_dir, resume=settings.resume)
+    run_store = RunStore(output_dir / "run.db").open()
+    input_snapshots = _build_input_snapshots(input_paths, resolved.detected_roles)
+    if settings.resume and run_store.has_run_metadata():
+        run_store.assert_resume_safe(
+            current_inputs=input_snapshots,
+            analysis_version=ANALYSIS_VERSION,
+            prompt_version=PROMPT_VERSION,
+        )
+    else:
+        run_store.initialize_run_metadata(
+            analysis_version=ANALYSIS_VERSION,
+            prompt_version=PROMPT_VERSION,
+            settings={
+                "llm_max_workers": settings.llm_max_workers,
+                "llm_max_retries": settings.llm_max_retries,
+                "llm_retry_backoff_seconds": settings.llm_retry_backoff_seconds,
+                "llm_retry_on_5xx": settings.llm_retry_on_5xx,
+                "resume": settings.resume,
+            },
+        )
+        run_store.replace_input_files(input_snapshots)
+        (output_dir / "input_manifest.json").write_text(json.dumps(input_snapshots, ensure_ascii=False, indent=2), encoding="utf-8")
+        (output_dir / "analysis_manifest.json").write_text(
+            json.dumps(
+                {
+                    "analysis_version": ANALYSIS_VERSION,
+                    "prompt_version": PROMPT_VERSION,
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    if run_store.count_joined_cases() == 0:
+        build_ingest_snapshot(run_store, resolved.inference_path, resolved.results_path)
 
     checkpoint = CheckpointStore(output_dir / "faultlens_checkpoint.sqlite3", enabled=settings.enable_checkpoints).open()
     case_analysis_path = output_dir / "case_analysis.jsonl"
@@ -65,7 +105,7 @@ def run_analysis(
         llm_enabled = bool(settings.api_key and settings.base_url and settings.model)
         batch: list[dict[str, Any]] = []
         with ThreadPoolExecutor(max_workers=settings.llm_max_workers) as executor:
-            for joined_case in join_records_iter(resolved.inference_path, resolved.results_path):
+            for joined_case in iter_joined_cases_from_store(run_store):
                 current_case_id = str(joined_case.get("case_id"))
                 if settings.resume and checkpoint.has_case(current_case_id):
                     continue
@@ -162,6 +202,7 @@ def run_analysis(
     _render_selected_cases(case_analysis_path, exemplar_ids, cases_dir, exemplars_dir)
 
     checkpoint.close()
+    run_store.close()
     return {
         "resolved": resolved,
         "summary": summary,
@@ -199,6 +240,9 @@ def _prepare_output_dir(output_dir: Path, *, resume: bool) -> None:
         output_dir / "hierarchical_root_cause_report.md",
         output_dir / "case_analysis.jsonl",
         output_dir / "faultlens_checkpoint.sqlite3",
+        output_dir / "run.db",
+        output_dir / "input_manifest.json",
+        output_dir / "analysis_manifest.json",
     ]:
         if target.exists():
             target.unlink()
@@ -208,6 +252,24 @@ def _prepare_output_dir(output_dir: Path, *, resume: bool) -> None:
     raw_responses_dir = output_dir / "llm_raw_responses"
     if raw_responses_dir.exists():
         shutil.rmtree(raw_responses_dir)
+
+
+def _build_input_snapshots(input_paths: list[Path], detected_roles: Dict[str, str]) -> list[Dict[str, Any]]:
+    snapshots: list[Dict[str, Any]] = []
+    for index, path in enumerate(input_paths):
+        stat = path.stat()
+        snapshots.append(
+            {
+                "path": str(path),
+                "declared_order": index,
+                "detected_role": detected_roles.get(str(path), "unknown"),
+                "size_bytes": int(stat.st_size),
+                "mtime_epoch": float(stat.st_mtime),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "sample_record_count": len(sample_jsonl(path).records),
+            }
+        )
+    return snapshots
 
 
 

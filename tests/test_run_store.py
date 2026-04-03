@@ -39,3 +39,44 @@ def test_run_store_persists_run_metadata_versions(tmp_path: Path) -> None:
     assert row["analysis_version"] == "det-v1"
     assert row["prompt_version"] == "prompt-v1"
     assert row["settings_json"]["llm_max_workers"] == 1
+
+
+def test_run_store_rejects_changed_input_manifest(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "run.db").open()
+    try:
+        store.record_input_file(
+            path="a.jsonl",
+            declared_order=0,
+            detected_role="inference",
+            size_bytes=10,
+            mtime_epoch=1.0,
+            sha256="old",
+            sample_record_count=1,
+        )
+        store.initialize_run_metadata(
+            analysis_version="det-v1",
+            prompt_version="prompt-v1",
+            settings={"llm_max_workers": 1},
+        )
+        try:
+            store.assert_resume_safe(
+                current_inputs=[
+                    {
+                        "path": "a.jsonl",
+                        "declared_order": 0,
+                        "detected_role": "inference",
+                        "size_bytes": 10,
+                        "mtime_epoch": 1.0,
+                        "sha256": "new",
+                        "sample_record_count": 1,
+                    }
+                ],
+                analysis_version="det-v1",
+                prompt_version="prompt-v1",
+            )
+        except ValueError as exc:
+            assert "input manifest mismatch" in str(exc)
+        else:
+            raise AssertionError("expected input manifest mismatch")
+    finally:
+        store.close()

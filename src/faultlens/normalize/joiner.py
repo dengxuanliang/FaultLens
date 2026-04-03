@@ -7,6 +7,7 @@ from tempfile import NamedTemporaryFile
 from typing import Any, Dict, Iterator, List, Optional
 
 from faultlens.ingest.jsonl import JsonlRecord, iter_jsonl_records
+from faultlens.scale.run_store import RunStore
 
 
 
@@ -172,6 +173,16 @@ def join_records_iter(inference_path: Path, results_path: Path) -> Iterator[Dict
                 yield case
         finally:
             connection.close()
+
+
+def build_ingest_snapshot(store: RunStore, inference_path: Path, results_path: Path) -> None:
+    for case in join_records_iter(inference_path, results_path):
+        store.record_joined_case(case)
+        store.ensure_analysis_job(case_id=str(case.get("case_id")), job_status="ingested")
+
+
+def iter_joined_cases_from_store(store: RunStore) -> Iterator[Dict[str, Any]]:
+    yield from store.iter_joined_cases()
 
 
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any, Dict
 
+PROMPT_VERSION = "attribution-v2"
+
 
 def build_attribution_messages(case: Dict[str, Any]) -> list[dict[str, str]]:
     findings = case.get("deterministic_findings", {})

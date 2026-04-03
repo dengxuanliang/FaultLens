@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS joined_cases (
     inference_line_number INTEGER,
     results_line_number INTEGER,
     input_role_detection TEXT,
+    case_json TEXT NOT NULL,
     inference_payload_json TEXT,
     results_payload_json TEXT,
     normalization_warnings_json TEXT NOT NULL,

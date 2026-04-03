@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 
 from faultlens.cli import main
+from faultlens.scale.run_store import RunStore
 
 
 def _write_large_fixture(path: Path, rows: list[dict]) -> None:
@@ -192,3 +193,62 @@ def test_cli_uses_bounded_llm_worker_concurrency(tmp_path: Path):
 
     assert exit_code == 0
     assert 1 < active["max"] <= 3
+
+
+def test_cli_persists_run_store_snapshot(tmp_path: Path):
+    inference_path = tmp_path / "inference.jsonl"
+    results_path = tmp_path / "results.jsonl"
+    output_dir = tmp_path / "outputs"
+
+    inference_rows = []
+    results_rows = []
+    for case_id in range(1, 5):
+        inference_rows.append(
+            {
+                "id": case_id,
+                "content": f"Double {case_id}",
+                "canonical_solution": "def solve(x):\n    return x * 2",
+                "labels": {"programming_language": "python", "execution_language": "python"},
+                "test": {"code": "assert solve(2) == 4\nassert solve(7) == 14"},
+                "completion": "```python\ndef solve(x):\n    return x + 2\n```",
+            }
+        )
+        results_rows.append(
+            {
+                "task_id": case_id,
+                "accepted": False,
+                "passed_at_1": 0,
+                "pass_at_k": 0,
+                "all_k_correct": 0,
+                "n": 1,
+                "programming_language": "python",
+            }
+        )
+
+    _write_large_fixture(inference_path, inference_rows)
+    _write_large_fixture(results_path, results_rows)
+
+    exit_code = main(
+        [
+            "analyze",
+            "--input",
+            str(inference_path),
+            str(results_path),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    assert (output_dir / "run.db").exists()
+    assert (output_dir / "input_manifest.json").exists()
+
+    store = RunStore(output_dir / "run.db").open()
+    try:
+        assert store.count_joined_cases() == 4
+        assert store.count_jobs() == 4
+        metadata = store.load_run_metadata()
+    finally:
+        store.close()
+
+    assert metadata["prompt_version"]
