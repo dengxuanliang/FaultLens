@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from faultlens.cli import main
 from faultlens.ingest.jsonl import load_jsonl
 from faultlens.ingest.resolver import detect_input_roles
 from faultlens.normalize.joiner import build_ingest_snapshot
@@ -83,3 +84,34 @@ def test_build_ingest_snapshot_persists_structured_ingest_events(tmp_path: Path)
     assert "bad_json" in event_types
     assert "empty_line" in event_types
     assert "missing_pair" in event_types
+
+
+def test_analyze_does_not_use_legacy_full_input_snapshot_builder_on_fresh_run(tmp_path: Path, monkeypatch) -> None:
+    inference_path = tmp_path / "inference.jsonl"
+    results_path = tmp_path / "results.jsonl"
+    output_dir = tmp_path / "outputs"
+    inference_path.write_text(
+        '{"id":1,"content":"c","canonical_solution":"x","completion":"y"}\n',
+        encoding="utf-8",
+    )
+    results_path.write_text('{"task_id":1,"accepted":false}\n', encoding="utf-8")
+
+    import faultlens.orchestrator as orchestrator
+
+    def fail_build_input_snapshots(input_paths, detected_roles):
+        raise AssertionError("fresh analyze should derive input manifest during ingest, not via legacy snapshot builder")
+
+    monkeypatch.setattr(orchestrator, "_build_input_snapshots", fail_build_input_snapshots)
+
+    exit_code = main(
+        [
+            "analyze",
+            "--input",
+            str(inference_path),
+            str(results_path),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0

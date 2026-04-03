@@ -14,14 +14,14 @@ from faultlens.attribution.engine import build_final_case_result
 from faultlens.config import Settings
 from faultlens.deterministic.pipeline import analyze_case_deterministically, analyze_cases_deterministically
 from faultlens.deterministic.runners.registry import build_runner_registry
-from faultlens.ingest.jsonl import sample_jsonl
+from faultlens.ingest.jsonl import JsonlScanObserver, iter_jsonl_records
 from faultlens.ingest.resolver import detect_input_roles
 from faultlens.llm.client import LLMClient
 from faultlens.llm.adaptive_parser import parse_attribution_response
 from faultlens.llm.prompting import PROMPT_VERSION, build_attribution_messages
 from faultlens.models import AttributionResult, CaseRecord, DeterministicFindings, EvaluationInfo, TaskInfo
 from faultlens.normalize.failure_gate import apply_failure_gate
-from faultlens.normalize.joiner import build_ingest_snapshot, iter_joined_cases_from_store
+from faultlens.normalize.joiner import build_ingest_snapshot, build_ingest_snapshot_with_manifest, iter_joined_cases_from_store
 from faultlens.reporting.aggregate import SummaryAccumulator
 from faultlens.reporting.render import (
     render_analysis_report,
@@ -45,17 +45,23 @@ def run_analysis(
 ) -> Dict[str, Any]:
     input_paths = [Path(path) for path in input_paths]
     resolved = detect_input_roles(input_paths)
+    input_metadata = _build_input_metadata(input_paths, resolved.detected_roles)
 
     _prepare_output_dir(output_dir, resume=settings.resume)
     run_store = RunStore(output_dir / "run.db").open()
-    input_snapshots = _build_input_snapshots(input_paths, resolved.detected_roles)
-    if settings.resume and run_store.has_run_metadata():
+    resume_run = settings.resume and run_store.has_run_metadata()
+    if resume_run:
+        input_snapshots = _build_input_snapshots(input_paths, resolved.detected_roles)
         run_store.assert_resume_safe(
             current_inputs=input_snapshots,
             analysis_version=ANALYSIS_VERSION,
             prompt_version=PROMPT_VERSION,
         )
         run_store.requeue_expired_leases(now=_utcnow_iso())
+        run_store.expire_retryable_jobs(
+            now=_utcnow_iso(),
+            max_attempts=_max_llm_attempts(settings),
+        )
         run_store.requeue_retryable_jobs(now=_utcnow_iso())
     else:
         run_store.initialize_run_metadata(
@@ -70,8 +76,6 @@ def run_analysis(
                 "resume": settings.resume,
             },
         )
-        run_store.replace_input_files(input_snapshots)
-        (output_dir / "input_manifest.json").write_text(json.dumps(input_snapshots, ensure_ascii=False, indent=2), encoding="utf-8")
         (output_dir / "analysis_manifest.json").write_text(
             json.dumps(
                 {
@@ -84,7 +88,17 @@ def run_analysis(
             encoding="utf-8",
         )
     if run_store.count_joined_cases() == 0:
-        build_ingest_snapshot(run_store, resolved.inference_path, resolved.results_path)
+        if resume_run:
+            build_ingest_snapshot(run_store, resolved.inference_path, resolved.results_path)
+        else:
+            input_snapshots = build_ingest_snapshot_with_manifest(
+                run_store,
+                resolved.inference_path,
+                resolved.results_path,
+                input_metadata=input_metadata,
+            )
+            run_store.replace_input_files(input_snapshots)
+            (output_dir / "input_manifest.json").write_text(json.dumps(input_snapshots, ensure_ascii=False, indent=2), encoding="utf-8")
 
     case_analysis_path = output_dir / "case_analysis.jsonl"
     cases_dir = output_dir / "cases"
@@ -378,6 +392,15 @@ def _is_retryable_llm_failure(parse_info: Dict[str, Any]) -> bool:
     return http_status == 429 or 500 <= int(http_status) < 600
 
 
+def _can_retry_llm_failure(parse_info: Dict[str, Any], *, settings: Settings, attempt_index: int) -> bool:
+    if not _is_retryable_llm_failure(parse_info):
+        return False
+    http_status = parse_info.get("http_status")
+    if http_status is not None and 500 <= int(http_status) < 600 and not settings.llm_retry_on_5xx:
+        return False
+    return attempt_index < _max_llm_attempts(settings)
+
+
 def _load_analyzed_case_from_store(run_store: RunStore, case_id: str) -> Dict[str, Any]:
     joined_case = run_store.load_joined_case(case_id)
     deterministic = run_store.get_deterministic_result(case_id)
@@ -405,6 +428,9 @@ def _build_input_snapshots(input_paths: list[Path], detected_roles: Dict[str, st
     snapshots: list[Dict[str, Any]] = []
     for index, path in enumerate(input_paths):
         stat = path.stat()
+        observer = JsonlScanObserver()
+        for _ in iter_jsonl_records(path, observer=observer):
+            pass
         snapshots.append(
             {
                 "path": str(path),
@@ -412,11 +438,27 @@ def _build_input_snapshots(input_paths: list[Path], detected_roles: Dict[str, st
                 "detected_role": detected_roles.get(str(path), "unknown"),
                 "size_bytes": int(stat.st_size),
                 "mtime_epoch": float(stat.st_mtime),
-                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                "sample_record_count": len(sample_jsonl(path).records),
+                "sha256": observer.sha256,
+                "sample_record_count": observer.sample_record_count,
             }
         )
     return snapshots
+
+
+def _build_input_metadata(input_paths: list[Path], detected_roles: Dict[str, str]) -> list[Dict[str, Any]]:
+    metadata: list[Dict[str, Any]] = []
+    for index, path in enumerate(input_paths):
+        stat = path.stat()
+        metadata.append(
+            {
+                "path": str(path),
+                "declared_order": index,
+                "detected_role": detected_roles.get(str(path), "unknown"),
+                "size_bytes": int(stat.st_size),
+                "mtime_epoch": float(stat.st_mtime),
+            }
+        )
+    return metadata
 
 
 def _utcnow_iso() -> str:
@@ -473,7 +515,11 @@ def _flush_llm_batch(
         finished_at = _utcnow_iso()
         _persist_llm_raw_response(llm_raw_responses_dir, item["record"].case_id, parse_info)
         _update_llm_stats(llm_response_stats, item["record"].case_id, parse_info)
-        retryable = _is_retryable_llm_failure(parse_info)
+        retryable = _can_retry_llm_failure(
+            parse_info,
+            settings=settings,
+            attempt_index=item["attempt_index"],
+        )
         next_retry_at = _next_retry_iso(seconds=settings.llm_retry_backoff_seconds) if retryable else None
         run_store.record_llm_attempt(
             case_id=item["record"].case_id,
@@ -641,6 +687,7 @@ def _build_run_context(
     stored_settings = metadata.get("settings_json") or {}
     input_files = run_store.load_input_files()
     input_warnings = [row["message"] for row in run_store.list_ingest_events()]
+    job_status_counts = run_store.count_jobs_by_status()
     case_counts = {"passed": 0, "attributable_failure": 0, "data_issue": 0, "join_issue": 0}
     for row in run_store.iter_final_result_rows():
         status = str(row.get("case_status", "unknown"))
@@ -658,9 +705,18 @@ def _build_run_context(
         "llm_warnings": llm_warnings,
         "llm_response_stats": llm_response_stats,
         "llm_max_workers": stored_settings.get("llm_max_workers"),
+        "job_status_counts": job_status_counts,
+        "pending_llm_backlog": sum(
+            int(job_status_counts.get(status, 0))
+            for status in ("llm_pending", "llm_running", "llm_failed_retryable")
+        ),
         "execution_mode": execution_mode,
         "checkpoint_path": str(checkpoint_path) if checkpoint_path else None,
     }
+
+
+def _max_llm_attempts(settings: Settings) -> int:
+    return max(1, 1 + settings.llm_max_retries)
 
 
 def _rebuild_llm_state_from_store(run_store: RunStore) -> tuple[list[str], Dict[str, Any]]:

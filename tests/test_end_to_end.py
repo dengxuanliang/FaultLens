@@ -430,6 +430,55 @@ def test_cli_persists_llm_attempt_audit_records(tmp_path: Path, fixtures_dir: Pa
     assert job["job_status"] == "finalized"
 
 
+def test_run_metadata_and_report_include_job_status_distribution(tmp_path: Path, fixtures_dir: Path, monkeypatch):
+    output_dir = tmp_path / "outputs"
+
+    class RetryableClient:
+        def __init__(self, settings):
+            self.enabled = True
+            self.last_warning = "llm unavailable: HTTP Error 429: Too Many Requests"
+            self.last_completion_info = {
+                "status": "request_error",
+                "invalid_reason": "HTTPError 429: Too Many Requests",
+                "http_status": 429,
+                "raw_response_excerpt": '{"error":{"message":"rate limit"}}',
+                "raw_response_text": '{"error":{"message":"rate limit"}}',
+                "raw_response_sha256": "abc123",
+            }
+
+        def complete_json(self, messages):
+            return None
+
+    monkeypatch.setattr("faultlens.orchestrator.LLMClient", RetryableClient)
+
+    exit_code = main([
+        "analyze",
+        "--input",
+        str(fixtures_dir / "inference_sample.jsonl"),
+        str(fixtures_dir / "results_sample.jsonl"),
+        "--output-dir",
+        str(output_dir),
+        "--api-key",
+        "k",
+        "--base-url",
+        "http://invalid.local",
+        "--model",
+        "m",
+        "--resume",
+    ])
+
+    assert exit_code == 0
+
+    run_metadata = json.loads((output_dir / "run_metadata.json").read_text(encoding="utf-8"))
+    assert run_metadata["job_status_counts"]["llm_failed_retryable"] >= 1
+    assert run_metadata["pending_llm_backlog"] >= 1
+
+    report_text = (output_dir / "analysis_report.md").read_text(encoding="utf-8")
+    assert "# 任务状态" in report_text
+    assert "llm_failed_retryable" in report_text
+    assert "待处理 LLM backlog：" in report_text
+
+
 def test_case_output_persists_request_error_response_body(tmp_path: Path, fixtures_dir: Path, monkeypatch):
     output_dir = tmp_path / "outputs"
     error_body = '{"error":{"message":"rate limit exceeded","type":"rate_limit"}}'

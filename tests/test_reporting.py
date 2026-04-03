@@ -135,3 +135,34 @@ def test_render_reports_contain_required_sections():
     assert "## 警告" in case_report
     assert "## 解释" in case_report
     assert "logic mismatch" in case_report
+
+
+def test_render_analysis_report_surfaces_llm_job_backlog():
+    result = make_result("1", "solution_incorrect")
+    summary = summarize_cases([result])
+
+    report = render_analysis_report(
+        summary,
+        [result],
+        run_context={
+            "input_files": ["inference.jsonl", "results.jsonl"],
+            "role_detection": {"inference.jsonl": "inference", "results.jsonl": "results"},
+            "join_stats": {"joined": 1, "join_issue": 0},
+            "case_counts": {"attributable_failure": 1},
+            "model_summary": "gpt-test",
+            "llm_max_workers": 4,
+            "job_status_counts": {
+                "finalized": 1,
+                "llm_pending": 3,
+                "llm_running": 2,
+                "llm_failed_retryable": 4,
+            },
+            "pending_llm_backlog": 9,
+        },
+    )
+
+    assert "# 任务状态" in report
+    assert "llm_pending" in report
+    assert "llm_running" in report
+    assert "llm_failed_retryable" in report
+    assert "待处理 LLM backlog：9" in report

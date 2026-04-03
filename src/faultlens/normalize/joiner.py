@@ -6,7 +6,7 @@ import sqlite3
 from tempfile import NamedTemporaryFile
 from typing import Any, Dict, Iterator, List, Optional
 
-from faultlens.ingest.jsonl import JsonlRecord, iter_jsonl_records
+from faultlens.ingest.jsonl import JsonlRecord, JsonlScanObserver, iter_jsonl_records
 from faultlens.scale.run_store import RunStore
 
 
@@ -145,8 +145,8 @@ def join_records_iter(
         connection = sqlite3.connect(handle.name)
         try:
             connection.execute("CREATE TABLE records (side TEXT NOT NULL, join_key TEXT NOT NULL, line_number INTEGER NOT NULL, payload_json TEXT NOT NULL, PRIMARY KEY(side, join_key))")
-            inference_dups = _stream_into_index(connection, Path(inference_path), "inference", "id", store)
-            results_dups = _stream_into_index(connection, Path(results_path), "results", "task_id", store)
+            inference_dups, _ = _stream_into_index(connection, Path(inference_path), "inference", "id", store)
+            results_dups, _ = _stream_into_index(connection, Path(results_path), "results", "task_id", store)
 
             query = """
                 SELECT keys.join_key,
@@ -203,6 +203,75 @@ def build_ingest_snapshot(store: RunStore, inference_path: Path, results_path: P
         store.ensure_analysis_job(case_id=str(case.get("case_id")), job_status="ingested")
 
 
+def build_ingest_snapshot_with_manifest(
+    store: RunStore,
+    inference_path: Path,
+    results_path: Path,
+    *,
+    input_metadata: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    path_metadata = {item["path"]: dict(item) for item in input_metadata}
+    snapshots: dict[str, dict[str, Any]] = {}
+    with NamedTemporaryFile(prefix="faultlens-join-", suffix=".sqlite3") as handle:
+        connection = sqlite3.connect(handle.name)
+        try:
+            connection.execute("CREATE TABLE records (side TEXT NOT NULL, join_key TEXT NOT NULL, line_number INTEGER NOT NULL, payload_json TEXT NOT NULL, PRIMARY KEY(side, join_key))")
+            inference_dups, inference_scan = _stream_into_index(connection, Path(inference_path), "inference", "id", store)
+            results_dups, results_scan = _stream_into_index(connection, Path(results_path), "results", "task_id", store)
+            snapshots[str(inference_path)] = {**path_metadata[str(inference_path)], **inference_scan}
+            snapshots[str(results_path)] = {**path_metadata[str(results_path)], **results_scan}
+
+            query = """
+                SELECT keys.join_key,
+                       inf.line_number, inf.payload_json,
+                       res.line_number, res.payload_json
+                FROM (
+                    SELECT join_key FROM records WHERE side = 'inference'
+                    UNION
+                    SELECT join_key FROM records WHERE side = 'results'
+                ) AS keys
+                LEFT JOIN records AS inf ON inf.side = 'inference' AND inf.join_key = keys.join_key
+                LEFT JOIN records AS res ON res.side = 'results' AND res.join_key = keys.join_key
+                ORDER BY LENGTH(keys.join_key), keys.join_key
+            """
+            for join_key, inf_line, inf_payload, res_line, res_payload in connection.execute(query):
+                if inf_payload is None or res_payload is None:
+                    reason = f"missing pair for key {join_key}"
+                    case = _build_join_issue_case(str(join_key), reason)
+                    _record_ingest_event(
+                        store,
+                        source_path=None,
+                        line_number=None,
+                        severity="warning",
+                        event_type="missing_pair",
+                        message=reason,
+                        payload_excerpt=str(join_key),
+                    )
+                elif str(join_key) in inference_dups or str(join_key) in results_dups:
+                    reason = f"duplicate join key {join_key}"
+                    case = _build_join_issue_case(str(join_key), reason)
+                    _record_ingest_event(
+                        store,
+                        source_path=None,
+                        line_number=None,
+                        severity="warning",
+                        event_type="duplicate_join_key",
+                        message=reason,
+                        payload_excerpt=str(join_key),
+                    )
+                else:
+                    case = _build_joined_case(
+                        str(join_key),
+                        JsonlRecord(line_number=int(inf_line), data=json.loads(inf_payload)),
+                        JsonlRecord(line_number=int(res_line), data=json.loads(res_payload)),
+                    )
+                store.record_joined_case(case)
+                store.ensure_analysis_job(case_id=str(case.get("case_id")), job_status="ingested")
+        finally:
+            connection.close()
+    return [snapshots[item["path"]] for item in sorted(input_metadata, key=lambda row: row["declared_order"])]
+
+
 def iter_joined_cases_from_store(store: RunStore) -> Iterator[Dict[str, Any]]:
     yield from store.iter_joined_cases()
 
@@ -214,9 +283,10 @@ def _stream_into_index(
     side: str,
     key_name: str,
     store: RunStore | None,
-) -> set[str]:
+) -> tuple[set[str], dict[str, Any]]:
     duplicates: set[str] = set()
-    for item in iter_jsonl_records(path):
+    observer = JsonlScanObserver()
+    for item in iter_jsonl_records(path, observer=observer):
         if isinstance(item, str):
             _record_loader_warning(store, path, side, item)
             continue
@@ -249,7 +319,10 @@ def _stream_into_index(
                 payload_excerpt=str(key),
             )
     connection.commit()
-    return duplicates
+    return duplicates, {
+        "sha256": observer.sha256,
+        "sample_record_count": observer.sample_record_count,
+    }
 
 
 def _record_loader_warning(store: RunStore | None, path: Path, side: str, warning: str) -> None:

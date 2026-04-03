@@ -398,6 +398,18 @@ class RunStore:
             ).fetchone()
         return int(row["value"])
 
+    def count_jobs_by_status(self) -> dict[str, int]:
+        connection = self._require_connection()
+        rows = connection.execute(
+            """
+            SELECT job_status, COUNT(*) AS value
+            FROM analysis_jobs
+            GROUP BY job_status
+            ORDER BY job_status
+            """
+        ).fetchall()
+        return {str(row["job_status"]): int(row["value"]) for row in rows}
+
     def update_job_after_deterministic(
         self,
         *,
@@ -747,6 +759,24 @@ class RunStore:
               AND next_retry_at <= ?
             """,
             (now, now),
+        )
+        connection.commit()
+        return int(cursor.rowcount)
+
+    def expire_retryable_jobs(self, *, now: str, max_attempts: int) -> int:
+        connection = self._require_connection()
+        cursor = connection.execute(
+            """
+            UPDATE analysis_jobs
+            SET job_status = 'llm_failed_terminal',
+                next_retry_at = NULL,
+                worker_lease_token = NULL,
+                worker_lease_until = NULL,
+                updated_at = ?
+            WHERE job_status = 'llm_failed_retryable'
+              AND attempt_count >= ?
+            """,
+            (now, max_attempts),
         )
         connection.commit()
         return int(cursor.rowcount)

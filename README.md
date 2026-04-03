@@ -105,7 +105,7 @@ A normal analysis run writes:
 
 Structured outputs include:
 - `case_analysis.jsonl`: per-case attribution, parse mode, parse reason, raw-response path, raw-response sha256
-- `run_metadata.json`: join stats, model summary, LLM warning log, response-quality stats
+- `run_metadata.json`: join stats, model summary, LLM warning log, response-quality stats, `analysis_jobs` status distribution, pending LLM backlog
 
 If an LLM request fails with a provider response body, FaultLens persists that raw body into `llm_raw_responses/` for later manual audit.
 

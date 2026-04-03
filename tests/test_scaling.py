@@ -277,6 +277,161 @@ def test_cli_retries_retryable_llm_jobs_only_after_backoff_window(tmp_path: Path
         store.close()
 
 
+def test_cli_stops_retryable_llm_jobs_after_max_retry_budget(tmp_path: Path, monkeypatch):
+    inference_path = tmp_path / "inference.jsonl"
+    results_path = tmp_path / "results.jsonl"
+    output_dir = tmp_path / "outputs"
+
+    _write_large_fixture(
+        inference_path,
+        [
+            {
+                "id": 1,
+                "content": "Double 1",
+                "canonical_solution": "def solve(x):\n    return x * 2",
+                "labels": {"programming_language": "python", "execution_language": "python"},
+                "test": {"code": "assert solve(2) == 4\nassert solve(7) == 14"},
+                "completion": "```python\ndef solve(x):\n    return x + 2\n```",
+            }
+        ],
+    )
+    _write_large_fixture(
+        results_path,
+        [
+            {
+                "task_id": 1,
+                "accepted": False,
+                "passed_at_1": 0,
+                "pass_at_k": 0,
+                "all_k_correct": 0,
+                "n": 1,
+                "programming_language": "python",
+            }
+        ],
+    )
+
+    import faultlens.orchestrator as orchestrator
+
+    class RetryableFailingClient:
+        def __init__(self, settings):
+            self.enabled = True
+            self.last_warning = "llm unavailable: rate limited"
+            self.last_completion_info = {}
+
+        def complete_json(self, messages):
+            self.last_completion_info = {
+                "status": "request_error",
+                "error_type": "HTTPError",
+                "invalid_reason": "HTTPError 429: Too Many Requests",
+                "http_status": 429,
+                "raw_response_excerpt": '{"error":{"message":"rate limit"}}',
+                "raw_response_text": '{"error":{"message":"rate limit"}}',
+                "raw_response_sha256": "rate",
+            }
+            return None
+
+    monkeypatch.setattr(orchestrator, "LLMClient", RetryableFailingClient)
+
+    time_points = iter(
+        [
+            "2026-04-03T00:00:00+00:00",
+            "2026-04-03T00:00:00+00:00",
+            "2026-04-03T00:00:01+00:00",
+            "2026-04-03T00:00:02+00:00",
+            "2026-04-03T00:00:02+00:00",
+            "2026-04-03T00:00:03+00:00",
+        ]
+    )
+    monkeypatch.setattr(orchestrator, "_utcnow_iso", lambda: next(time_points))
+    monkeypatch.setattr(orchestrator, "_future_iso", lambda *, seconds: "2026-04-03T00:05:00+00:00")
+
+    first = main(
+        [
+            "analyze",
+            "--input",
+            str(inference_path),
+            str(results_path),
+            "--output-dir",
+            str(output_dir),
+            "--api-key",
+            "k",
+            "--base-url",
+            "http://invalid.local",
+            "--model",
+            "m",
+            "--llm-max-retries",
+            "1",
+            "--resume",
+        ]
+    )
+    assert first == 0
+
+    monkeypatch.setattr(orchestrator, "_utcnow_iso", lambda: "2026-04-03T00:05:01+00:00")
+    monkeypatch.setattr(orchestrator, "_future_iso", lambda *, seconds: "2026-04-03T00:10:01+00:00")
+
+    second = main(
+        [
+            "analyze",
+            "--input",
+            str(inference_path),
+            str(results_path),
+            "--output-dir",
+            str(output_dir),
+            "--api-key",
+            "k",
+            "--base-url",
+            "http://invalid.local",
+            "--model",
+            "m",
+            "--llm-max-retries",
+            "1",
+            "--resume",
+        ]
+    )
+    assert second == 0
+
+    store = RunStore(output_dir / "run.db").open()
+    try:
+        attempts = store.list_llm_attempts("1")
+        job = store.get_job("1")
+    finally:
+        store.close()
+
+    assert len(attempts) == 2
+    assert job["attempt_count"] == 2
+    assert job["job_status"] == "finalized"
+    assert job["next_retry_at"] is None
+
+    third = main(
+        [
+            "analyze",
+            "--input",
+            str(inference_path),
+            str(results_path),
+            "--output-dir",
+            str(output_dir),
+            "--api-key",
+            "k",
+            "--base-url",
+            "http://invalid.local",
+            "--model",
+            "m",
+            "--llm-max-retries",
+            "1",
+            "--resume",
+        ]
+    )
+    assert third == 0
+
+    store = RunStore(output_dir / "run.db").open()
+    try:
+        attempts = store.list_llm_attempts("1")
+    finally:
+        store.close()
+
+    assert len(attempts) == 2
+
+
 def test_cli_uses_bounded_llm_worker_concurrency(tmp_path: Path):
     inference_path = tmp_path / "inference.jsonl"
     results_path = tmp_path / "results.jsonl"

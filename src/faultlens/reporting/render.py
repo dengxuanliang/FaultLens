@@ -20,6 +20,7 @@ def render_analysis_report(summary: SummaryReport, results: list[AttributionResu
         f"- 模型配置：{run_context.get('model_summary', 'deterministic-only')}\n"
         f"- LLM 并发数：{run_context.get('llm_max_workers', 1)}\n"
         f"- 案例总数：{summary.total_cases}",
+        "# 任务状态\n" + _format_job_status_section(run_context),
         "# 确定性分析摘要\n" + _format_signal_mapping(summary.deterministic_signal_counts, total=total_failures),
         "# LLM 根因分布\n" + _format_root_cause_mapping(summary.root_cause_counts, total=total_failures),
         "# 三层错因聚合\n" + _format_hierarchy_summary(summary, total=total_failures),
@@ -181,6 +182,15 @@ def _format_llm_response_stats(stats: dict | None) -> str:
         f"- 非规范原因分布：{reasons if reasons else '无'}",
         f"- raw_response_excerpts: {samples if samples else '无'}",
         f"- 请求错误数：{stats.get('request_errors', 0)}",
+    ]
+    return "\n".join(lines)
+
+
+def _format_job_status_section(run_context: dict) -> str:
+    counts = run_context.get("job_status_counts") or {}
+    lines = [
+        f"- job_status_counts: {counts if counts else '无'}",
+        f"- 待处理 LLM backlog：{run_context.get('pending_llm_backlog', 0)}",
     ]
     return "\n".join(lines)
 
