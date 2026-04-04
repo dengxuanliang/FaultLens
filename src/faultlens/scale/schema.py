@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 BASE_SCHEMA_SQL = """
@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS llm_attempts (
     response_text TEXT,
     response_path TEXT,
     response_sha256 TEXT,
+    selected_payload_json TEXT,
     parse_mode TEXT,
     parse_reason TEXT,
     is_selected INTEGER NOT NULL DEFAULT 0
@@ -152,9 +153,24 @@ def _migration_2_to_3(connection) -> None:
         connection.execute("ALTER TABLE llm_attempts ADD COLUMN response_path TEXT")
 
 
+def _migration_3_to_4(connection) -> None:
+    has_table = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'llm_attempts' LIMIT 1"
+    ).fetchone()
+    if not has_table:
+        return
+    columns = {
+        str(row[1])
+        for row in connection.execute("PRAGMA table_info(llm_attempts)").fetchall()
+    }
+    if "selected_payload_json" not in columns:
+        connection.execute("ALTER TABLE llm_attempts ADD COLUMN selected_payload_json TEXT")
+
+
 MIGRATIONS = {
     1: _migration_1_to_2,
     2: _migration_2_to_3,
+    3: _migration_3_to_4,
 }
 
 

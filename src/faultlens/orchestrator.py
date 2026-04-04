@@ -17,12 +17,21 @@ from faultlens.deterministic.runners.registry import build_runner_registry
 from faultlens.ingest.jsonl import JsonlScanObserver, iter_jsonl_records
 from faultlens.ingest.resolver import detect_input_roles
 from faultlens.llm.client import LLMClient
-from faultlens.llm.adaptive_parser import parse_attribution_response
 from faultlens.llm.prompting import PROMPT_VERSION, build_attribution_messages
 from faultlens.models import AttributionResult, CaseRecord, DeterministicFindings, EvaluationInfo, TaskInfo
 from faultlens.normalize.failure_gate import apply_failure_gate
 from faultlens.normalize.joiner import build_ingest_snapshot, build_ingest_snapshot_with_manifest, iter_joined_cases_from_store
 from faultlens.reporting.aggregate import SummaryAccumulator
+from faultlens.reporting.runtime import (
+    build_run_context,
+    export_case_report,
+    iter_results,
+    load_run_status as _load_run_status,
+    load_selected_llm_result,
+    rebuild_llm_state_from_store,
+    result_from_row,
+    summarize_results_from_store,
+)
 from faultlens.reporting.render import (
     render_analysis_report,
     render_case_report,
@@ -124,10 +133,10 @@ def run_analysis(
     case_status_counts = {"passed": 0, "attributable_failure": 0, "data_issue": 0, "join_issue": 0}
     if settings.resume:
         for row in run_store.iter_final_result_rows():
-            result = _result_from_row(row)
+            result = result_from_row(row)
             summary_accumulator.add(result)
             case_status_counts[result.case_status] = case_status_counts.get(result.case_status, 0) + 1
-        llm_warnings, llm_response_stats = _rebuild_llm_state_from_store(run_store)
+        llm_warnings, llm_response_stats = rebuild_llm_state_from_store(run_store, stats_factory=_initial_llm_response_stats)
     else:
         llm_warnings = []
         llm_response_stats = _initial_llm_response_stats()
@@ -158,7 +167,6 @@ def run_analysis(
                         llm_warnings=llm_warnings,
                         llm_response_stats=llm_response_stats,
                         result_handle=result_handle,
-                        checkpoint=None,
                         llm_raw_responses_dir=llm_raw_responses_dir,
                         run_store=run_store,
                     )
@@ -173,7 +181,6 @@ def run_analysis(
                         llm_warnings=llm_warnings,
                         llm_response_stats=llm_response_stats,
                         result_handle=result_handle,
-                        checkpoint=None,
                         llm_raw_responses_dir=llm_raw_responses_dir,
                         run_store=run_store,
                     )
@@ -181,7 +188,6 @@ def run_analysis(
         _finalize_pending_results(
             run_store=run_store,
             result_handle=result_handle,
-            checkpoint=None,
             summary_accumulator=summary_accumulator,
             case_status_counts=case_status_counts,
             llm_warnings=llm_warnings,
@@ -227,12 +233,12 @@ def finalize_outputs(
         should_close = True
     try:
         _export_case_analysis_from_store(run_store, output_dir / "case_analysis.jsonl")
-        summary = _summarize_results_from_store(run_store)
+        summary = summarize_results_from_store(run_store)
         if llm_warnings is None or llm_response_stats is None:
-            rebuilt_warnings, rebuilt_stats = _rebuild_llm_state_from_store(run_store)
+            rebuilt_warnings, rebuilt_stats = rebuild_llm_state_from_store(run_store, stats_factory=_initial_llm_response_stats)
             llm_warnings = rebuilt_warnings if llm_warnings is None else llm_warnings
             llm_response_stats = rebuilt_stats if llm_response_stats is None else llm_response_stats
-        run_context = _build_run_context(
+        run_context = build_run_context(
             run_store=run_store,
             summary=summary,
             llm_warnings=llm_warnings,
@@ -252,7 +258,7 @@ def finalize_outputs(
             encoding="utf-8",
         )
         with (output_dir / "hierarchical_root_cause_report.md").open("w", encoding="utf-8") as handle:
-            write_hierarchical_root_cause_report(handle, summary, _iter_results(output_dir / "case_analysis.jsonl"))
+            write_hierarchical_root_cause_report(handle, summary, iter_results(output_dir / "case_analysis.jsonl"))
 
         cases_dir = output_dir / "cases"
         exemplars_dir = output_dir / "exemplars"
@@ -361,7 +367,6 @@ def _finalize_pending_results(
     *,
     run_store: RunStore,
     result_handle,
-    checkpoint,
     summary_accumulator: SummaryAccumulator,
     case_status_counts: Dict[str, int],
     llm_warnings: list[str],
@@ -376,7 +381,7 @@ def _finalize_pending_results(
         if job_status not in {"deterministic_done", "llm_done", "llm_failed_terminal"}:
             continue
         analyzed = _load_analyzed_case_from_store(run_store, case_id)
-        llm_result, llm_parse_info = _load_selected_llm_result(run_store, case_id)
+        llm_result, llm_parse_info = load_selected_llm_result(run_store, case_id)
         result = build_final_case_result(
             _to_case_record(analyzed),
             _to_findings(analyzed),
@@ -388,7 +393,6 @@ def _finalize_pending_results(
             summary_accumulator,
             case_status_counts,
             result_handle,
-            checkpoint,
             llm_warnings,
             llm_response_stats,
             run_store,
@@ -497,7 +501,6 @@ def _flush_llm_batch(
     llm_warnings: list[str],
     llm_response_stats: Dict[str, Any],
     result_handle,
-    checkpoint,
     llm_raw_responses_dir: Path,
     run_store: RunStore,
 ) -> None:
@@ -546,9 +549,9 @@ def _flush_llm_batch(
             outcome=parse_info.get("status") or ("completed" if llm_result else "unknown"),
             parse_mode=parse_info.get("status"),
             parse_reason=parse_info.get("invalid_reason"),
-            response_text=None,
             response_path=parse_info.get("raw_response_path"),
             response_sha256=parse_info.get("raw_response_sha256"),
+            selected_payload=llm_result if llm_result else None,
             error_type=parse_info.get("error_type"),
             error_message=warning,
             http_status=parse_info.get("http_status"),
@@ -573,7 +576,6 @@ def _flush_llm_batch(
             summary_accumulator,
             case_status_counts,
             result_handle,
-            checkpoint,
             llm_warnings,
             llm_response_stats,
             run_store,
@@ -636,7 +638,6 @@ def _persist_result(
     summary_accumulator: SummaryAccumulator,
     case_status_counts: Dict[str, int],
     result_handle,
-    checkpoint,
     llm_warnings: list[str],
     llm_response_stats: Dict[str, Any],
     run_store: RunStore,
@@ -648,10 +649,6 @@ def _persist_result(
     result_handle.flush()
     summary_accumulator.add(result)
     case_status_counts[result.case_status] = case_status_counts.get(result.case_status, 0) + 1
-    if checkpoint is not None:
-        checkpoint.store_result(result.case_id, result_row)
-        checkpoint.save_metadata("llm_warnings", llm_warnings)
-        checkpoint.save_metadata("llm_response_stats", llm_response_stats)
     run_store.save_final_result(result_row, commit=False)
     if finalize_job:
         run_store.mark_job_finalized(result.case_id, commit=False)
@@ -675,7 +672,7 @@ def _render_all_cases(case_analysis_path: Path, cases_dir: Path) -> None:
     with case_analysis_path.open("r", encoding="utf-8") as handle:
         for raw in handle:
             row = json.loads(raw)
-            result = _result_from_row(row)
+            result = result_from_row(row)
             text = render_case_report(result)
             (cases_dir / f"{result.case_id}.md").write_text(text, encoding="utf-8")
 
@@ -688,7 +685,7 @@ def _render_exemplar_cases(case_analysis_path: Path, exemplar_ids: set[str], exe
             row = json.loads(raw)
             if str(row.get("case_id")) not in exemplar_ids:
                 continue
-            result = _result_from_row(row)
+            result = result_from_row(row)
             if result.root_cause:
                 text = render_case_report(result)
                 slug = result.root_cause.replace("/", "-")
@@ -700,169 +697,12 @@ def _increment_reason(counter: Dict[str, int], reason: str) -> None:
     counter[reason] = counter.get(reason, 0) + 1
 
 
-def _summarize_results_from_store(run_store: RunStore):
-    summary_accumulator = SummaryAccumulator()
-    for row in run_store.iter_final_result_rows():
-        summary_accumulator.add(_result_from_row(row))
-    return summary_accumulator.to_summary()
-
-
-def _build_run_context(
-    *,
-    run_store: RunStore,
-    summary,
-    llm_warnings: list[str],
-    llm_response_stats: Dict[str, Any],
-    execution_mode: str,
-) -> Dict[str, Any]:
-    metadata = run_store.load_run_metadata()
-    stored_settings = metadata.get("settings_json") or {}
-    input_files = run_store.load_input_files()
-    input_warnings = [row["message"] for row in run_store.list_run_warnings()] + [
-        row["message"] for row in run_store.list_ingest_events()
-    ]
-    job_status_counts = run_store.count_jobs_by_status()
-    case_counts = {"passed": 0, "attributable_failure": 0, "data_issue": 0, "join_issue": 0}
-    for row in run_store.iter_final_result_rows():
-        status = str(row.get("case_status", "unknown"))
-        case_counts[status] = case_counts.get(status, 0) + 1
-    return {
-        "input_files": [item["path"] for item in input_files],
-        "role_detection": {item["path"]: item["detected_role"] for item in input_files},
-        "join_stats": {
-            "joined": summary.total_cases - case_counts.get("join_issue", 0),
-            "join_issue": case_counts.get("join_issue", 0),
-        },
-        "case_counts": case_counts,
-        "model_summary": metadata.get("settings_json", {}).get("model") or metadata.get("faultlens_version") or "deterministic-only",
-        "input_warnings": input_warnings,
-        "llm_warnings": llm_warnings,
-        "llm_response_stats": llm_response_stats,
-        "llm_max_workers": stored_settings.get("llm_max_workers"),
-        "job_status_counts": job_status_counts,
-        "pending_llm_backlog": sum(
-            int(job_status_counts.get(status, 0))
-            for status in ("llm_pending", "llm_running", "llm_failed_retryable")
-        ),
-        "execution_mode": execution_mode,
-    }
-
-
 def _max_llm_attempts(settings: Settings) -> int:
     return max(1, 1 + settings.llm_max_retries)
 
 
-def _rebuild_llm_state_from_store(run_store: RunStore) -> tuple[list[str], Dict[str, Any]]:
-    warnings: list[str] = []
-    stats = _initial_llm_response_stats()
-    for row in run_store.iter_llm_attempt_rows():
-        warning = row.get("error_message")
-        if warning:
-            warnings.append(warning)
-        response_text = row.get("response_text") or _read_response_text(run_store, row.get("response_path"))
-        _update_llm_stats(
-            stats,
-            str(row.get("case_id")),
-            {
-                "status": row.get("parse_mode"),
-                "invalid_reason": row.get("parse_reason"),
-                "raw_response_excerpt": _excerpt_text(response_text),
-            },
-        )
-    if stats["attempted"]:
-        stats["nonconforming_percentage"] = round(
-            stats["nonconforming"] / stats["attempted"] * 100, 2
-        )
-    return warnings, stats
-
-
-def _load_selected_llm_result(run_store: RunStore, case_id: str) -> tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
-    attempts = run_store.list_llm_attempts(case_id)
-    if not attempts:
-        return None, {
-            "status": None,
-            "invalid_reason": None,
-            "raw_response_excerpt": None,
-            "raw_response_path": None,
-            "raw_response_sha256": None,
-        }
-    selected = next((row for row in attempts if row.get("is_selected")), attempts[-1])
-    response_text = selected.get("response_text") or _read_response_text(run_store, selected.get("response_path"))
-    parsed_payload = None
-    if response_text:
-        parsed = parse_attribution_response(response_text)
-        if parsed.payload:
-            parsed_payload = parsed.payload
-    return parsed_payload, {
-        "status": selected.get("parse_mode"),
-        "invalid_reason": selected.get("parse_reason"),
-        "raw_response_excerpt": _excerpt_text(response_text),
-        "raw_response_path": selected.get("response_path"),
-        "raw_response_sha256": selected.get("response_sha256"),
-    }
-
-
-def _excerpt_text(text: str | None, *, limit: int = 200) -> str | None:
-    if not text:
-        return None
-    normalized = text.strip()
-    if len(normalized) <= limit:
-        return normalized
-    return normalized[: limit - 3] + "..."
-
-
-def _read_response_text(run_store: RunStore, response_path: str | None) -> str | None:
-    if not response_path:
-        return None
-    raw_path = run_store.path.parent / response_path
-    if not raw_path.exists():
-        return None
-    return raw_path.read_text(encoding="utf-8")
-
-
-
-def _result_from_row(row: Dict[str, Any]) -> AttributionResult:
-    return AttributionResult(**row)
-
-
-def export_case_report(*, output_dir: Path, case_id: str, dest: Path | None = None) -> Path:
-    output_dir = Path(output_dir)
-    run_store = RunStore(output_dir / "run.db").open()
-    try:
-        row = run_store.load_final_result_row(str(case_id))
-        result = _result_from_row(row)
-    finally:
-        run_store.close()
-
-    destination = Path(dest) if dest is not None else output_dir / "cases" / f"{case_id}.md"
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(render_case_report(result), encoding="utf-8")
-    return destination
-
-
 def load_run_status(*, output_dir: Path) -> Dict[str, Any]:
-    output_dir = Path(output_dir)
-    run_store = RunStore(output_dir / "run.db").open()
-    try:
-        summary = _summarize_results_from_store(run_store)
-        llm_warnings, llm_response_stats = _rebuild_llm_state_from_store(run_store)
-        return _build_run_context(
-            run_store=run_store,
-            summary=summary,
-            llm_warnings=llm_warnings,
-            llm_response_stats=llm_response_stats,
-            execution_mode="status",
-        )
-    finally:
-        run_store.close()
-
-
-def _iter_results(case_analysis_path: Path) -> Iterator[AttributionResult]:
-    with case_analysis_path.open("r", encoding="utf-8") as handle:
-        for raw in handle:
-            if not raw.strip():
-                continue
-            yield _result_from_row(json.loads(raw))
+    return _load_run_status(output_dir=output_dir, stats_factory=_initial_llm_response_stats)
 
 
 

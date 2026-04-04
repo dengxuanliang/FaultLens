@@ -703,9 +703,9 @@ class RunStore:
         outcome: str,
         parse_mode: str | None,
         parse_reason: str | None,
-        response_text: str | None,
         response_path: str | None,
         response_sha256: str | None,
+        selected_payload: dict[str, Any] | None,
         error_type: str | None,
         error_message: str | None,
         http_status: int | None,
@@ -738,10 +738,11 @@ class RunStore:
                 response_text,
                 response_path,
                 response_sha256,
+                selected_payload_json,
                 parse_mode,
                 parse_reason,
                 is_selected
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 case_id,
@@ -757,9 +758,10 @@ class RunStore:
                 outcome,
                 error_type,
                 error_message,
-                response_text,
+                None,
                 response_path,
                 response_sha256,
+                json.dumps(selected_payload, ensure_ascii=False) if selected_payload is not None else None,
                 parse_mode,
                 parse_reason,
                 int(is_selected),
@@ -770,6 +772,13 @@ class RunStore:
         return int(cursor.lastrowid)
 
     def list_llm_attempts(self, case_id: str) -> list[dict[str, Any]]:
+        results = []
+        for item in self._load_llm_attempt_rows(case_id):
+            item.pop("response_text", None)
+            results.append(item)
+        return results
+
+    def _load_llm_attempt_rows(self, case_id: str) -> list[dict[str, Any]]:
         connection = self._require_connection()
         rows = connection.execute(
             """
@@ -791,6 +800,7 @@ class RunStore:
                 response_text,
                 response_path,
                 response_sha256,
+                selected_payload_json,
                 parse_mode,
                 parse_reason,
                 is_selected
@@ -800,7 +810,12 @@ class RunStore:
             """,
             (case_id,),
         ).fetchall()
-        return [dict(row) for row in rows]
+        results = []
+        for row in rows:
+            item = dict(row)
+            item["selected_payload_json"] = json.loads(item["selected_payload_json"]) if item.get("selected_payload_json") else None
+            results.append(item)
+        return results
 
     def requeue_expired_leases(self, *, now: str) -> int:
         connection = self._require_connection()

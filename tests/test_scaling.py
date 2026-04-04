@@ -1033,6 +1033,7 @@ def test_cli_resume_rebuilds_selected_llm_result_from_response_file(tmp_path: Pa
         connection.commit()
     finally:
         store.close()
+    (output_dir / "llm_raw_responses" / "1.txt").unlink()
 
     second = main(
         [

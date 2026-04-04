@@ -230,9 +230,9 @@ def test_run_store_records_response_path_without_inline_raw_body(tmp_path: Path)
             outcome="strict_json",
             parse_mode="strict_json",
             parse_reason=None,
-            response_text=None,
             response_path="llm_raw_responses/2.txt",
             response_sha256="abc123",
+            selected_payload={"root_cause": "solution_incorrect"},
             error_type=None,
             error_message=None,
             http_status=None,
@@ -241,5 +241,6 @@ def test_run_store_records_response_path_without_inline_raw_body(tmp_path: Path)
     finally:
         store.close()
 
-    assert attempts[0]["response_text"] is None
+    assert "response_text" not in attempts[0]
     assert attempts[0]["response_path"] == "llm_raw_responses/2.txt"
+    assert attempts[0]["selected_payload_json"] == {"root_cause": "solution_incorrect"}

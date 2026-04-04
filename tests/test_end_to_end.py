@@ -436,7 +436,7 @@ def test_cli_persists_llm_attempt_audit_records(tmp_path: Path, fixtures_dir: Pa
 
     assert len(attempts) == 1
     assert '"role": "system"' in attempts[0]["request_messages_json"]
-    assert attempts[0]["response_text"] is None
+    assert "response_text" not in attempts[0]
     assert attempts[0]["response_path"] == "llm_raw_responses/2.txt"
     assert attempts[0]["response_sha256"] == "abc123"
     assert attempts[0]["parse_mode"] == "strict_json"
