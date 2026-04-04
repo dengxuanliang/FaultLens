@@ -124,6 +124,7 @@ def test_render_reports_contain_required_sections():
     hierarchy_report = render_hierarchical_root_cause_report(summary, [result])
 
     assert "# 运行摘要" in report
+    assert "# 关键结论" in report
     assert "# 确定性分析摘要" in report
     assert "# LLM 根因分布" in report
     assert "# 三层错因聚合" in report
@@ -167,6 +168,39 @@ def test_render_reports_contain_required_sections():
     assert "## 警告" in case_report
     assert "## 解释" in case_report
     assert "logic mismatch" in case_report
+
+
+def test_render_analysis_report_includes_executive_key_findings():
+    results = [
+        make_result("1", "solution_incorrect"),
+        make_result("2", "implementation_bug", needs_human_review=True),
+    ]
+    summary = summarize_cases(results)
+
+    report = render_analysis_report(
+        summary,
+        results,
+        run_context={
+            "input_files": ["inference.jsonl", "results.jsonl"],
+            "role_detection": {"inference.jsonl": "inference", "results.jsonl": "results"},
+            "join_stats": {"joined": 2, "join_issue": 0},
+            "case_counts": {"attributable_failure": 2},
+            "model_summary": "deterministic-only",
+            "llm_max_workers": 1,
+            "health_summary": {
+                "run_health": "warning",
+                "ready_for_delivery": True,
+                "finalized_ratio": "100.0%",
+                "blocking_issues": [],
+                "warnings": ["1 case requires human review"],
+            },
+            "pending_llm_backlog": 0,
+        },
+    )
+
+    assert "主要根因：解答逻辑错误 (1), 实现缺陷 (1)" in report
+    assert "人工复核：1 个案例需要人工复核" in report
+    assert "交付状态：可交付" in report
 
 
 def test_render_analysis_report_surfaces_llm_job_backlog():

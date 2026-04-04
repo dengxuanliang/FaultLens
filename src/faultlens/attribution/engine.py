@@ -24,6 +24,20 @@ def _normalize_root_cause(value: Optional[str]) -> str:
     return "insufficient_evidence"
 
 
+def _constrain_root_cause(candidate: str, findings: DeterministicFindings) -> str:
+    signal_set = set(findings.signals)
+    if signal_set & {"missing_code", "code_extraction_failed"}:
+        return "incomplete_or_truncated_solution"
+    if signal_set & {"signature_mismatch", "entrypoint_mismatch", "api_mismatch"} and not signal_set & {"compile_error", "runtime_error"}:
+        if candidate in {"solution_incorrect", "implementation_bug", "task_misunderstanding"}:
+            return "contract_or_interface_violation"
+    if signal_set & {"compile_error", "runtime_error", "syntax_error"} and candidate in {"solution_incorrect", "contract_or_interface_violation"}:
+        return "implementation_bug"
+    if "suspicious_eval_mismatch" in signal_set and candidate == "possible_evaluation_mismatch":
+        return candidate
+    return candidate
+
+
 
 def build_final_case_result(
     case: CaseRecord,
@@ -70,7 +84,7 @@ def build_final_case_result(
             hierarchical_cause=hierarchical_cause,
         )
 
-    root_cause = _normalize_root_cause(findings.root_cause_hint)
+    root_cause = _constrain_root_cause(_normalize_root_cause(findings.root_cause_hint), findings)
     llm_payload = None
     final_decision_source = "deterministic_only"
     llm_signals = []
@@ -82,8 +96,8 @@ def build_final_case_result(
         llm_payload = llm_result
         llm_signals = list(llm_result.get("llm_signals", []))
         final_decision_source = "deterministic_plus_llm"
-        root_cause = _normalize_root_cause(llm_result.get("root_cause") or root_cause)
-        secondary_cause = _normalize_root_cause(llm_result.get("secondary_cause")) if llm_result.get("secondary_cause") else None
+        root_cause = _constrain_root_cause(_normalize_root_cause(llm_result.get("root_cause") or root_cause), findings)
+        secondary_cause = _constrain_root_cause(_normalize_root_cause(llm_result.get("secondary_cause")), findings) if llm_result.get("secondary_cause") else None
         explanation = llm_result.get("explanation") or explanation
         improvement_hints = list(llm_result.get("improvement_hints") or improvement_hints)
         confidence = float(llm_result.get("confidence")) if llm_result.get("confidence") is not None else confidence

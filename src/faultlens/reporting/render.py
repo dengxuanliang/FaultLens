@@ -24,6 +24,7 @@ def render_analysis_report(summary: SummaryReport, results: list[AttributionResu
         f"- 案例总数：{summary.total_cases}\n"
         f"- 失败样本数：{failed_cases}\n"
         f"- 可归因失败数：{attributable_failures}",
+        "# 关键结论\n" + _format_key_findings(summary, run_context),
         "# 健康摘要\n" + _format_health_summary(run_context.get("health_summary")),
         "# 任务状态\n" + _format_job_status_section(run_context),
         "# 能力快照\n" + _format_capability_snapshot(run_context.get("capability_snapshot")),
@@ -266,6 +267,23 @@ def _format_health_summary(summary: dict | None) -> str:
     lines.append(f"- 阻塞项：{blocking_issues if blocking_issues else '无'}")
     lines.append(f"- 告警项：{warnings if warnings else '无'}")
     return "\n".join(lines)
+
+
+def _format_key_findings(summary: SummaryReport, run_context: dict) -> str:
+    top_causes = sorted(
+        list(summary.root_cause_counts.items()),
+        key=lambda item: -item[1],
+    )
+    formatted_causes = ", ".join(f"{display_root_cause(cause)} ({count})" for cause, count in top_causes[:3]) or "无"
+    review_count = len(summary.review_queue)
+    delivery = "可交付" if (run_context.get("health_summary") or {}).get("ready_for_delivery") else "暂不建议交付"
+    return "\n".join(
+        [
+            f"- 主要根因：{formatted_causes}",
+            f"- 人工复核：{review_count} 个案例需要人工复核" if review_count else "- 人工复核：无",
+            f"- 交付状态：{delivery}",
+        ]
+    )
 
 
 def _format_capability_snapshot(snapshot: dict | None) -> str:

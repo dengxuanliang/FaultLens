@@ -36,7 +36,12 @@ def build_attribution_messages(case: Dict[str, Any]) -> list[dict[str, str]]:
                 "conflicting, insufficient_deterministic_evidence. confidence must be a number between 0 and 1. "
                 "observable_evidence must contain 1 to 5 concrete observable facts. evidence_refs must contain 1 to 5 input field references. "
                 "improvement_hints must contain 0 to 5 actionable next steps. review_reason must be null unless needs_human_review is true. "
-                "Prefer the most specific supported root cause. If deterministic findings and your judgment conflict, set deterministic_alignment to conflicting and explain why. "
+                "Prefer the most specific supported root cause. "
+                "Use contract_or_interface_violation when the code logic may be otherwise correct but the function name, signature, entrypoint, or API contract does not match the harness. "
+                "Use implementation_bug for syntax errors, compile failures, runtime crashes, or broken low-level code construction. "
+                "Use incomplete_or_truncated_solution when the completion is missing executable code or is obviously cut off. "
+                "Use solution_incorrect only when the callable interface is present and the core algorithmic logic is wrong. "
+                "If deterministic findings and your judgment conflict, set deterministic_alignment to conflicting and explain why. "
                 "If the case may be an evaluator or pipeline issue, prefer possible_evaluation_mismatch and set needs_human_review to true. "
                 "Return valid JSON only."
             ),

@@ -86,3 +86,65 @@ def test_build_final_case_result_uses_llm_confidence_and_review_flags():
     assert result.review_reason == "deterministic and evaluator disagree"
     assert result.llm_judgment["failure_stage"] == "evaluation_judgment"
     assert result.llm_judgment["deterministic_alignment"] == "conflicting"
+
+
+def test_build_final_case_result_coerces_logic_label_to_contract_violation_for_pure_interface_signals():
+    case = make_case()
+    findings = DeterministicFindings(
+        signals=["signature_mismatch", "entrypoint_mismatch", "api_mismatch", "test_failure", "logic_mismatch"],
+        root_cause_hint="contract_or_interface_violation",
+        findings={"test_status": "failed"},
+    )
+
+    result = build_final_case_result(
+        case,
+        findings,
+        llm_result={
+            "root_cause": "solution_incorrect",
+            "secondary_cause": None,
+            "failure_stage": "implementation",
+            "summary": "Wrong logic.",
+            "explanation": "The solution logic is wrong.",
+            "observable_evidence": ["solve is undefined in the harness"],
+            "evidence_refs": ["deterministic_findings.signature_check_status"],
+            "deterministic_alignment": "partially_consistent",
+            "confidence": 0.88,
+            "needs_human_review": False,
+            "review_reason": None,
+            "improvement_hints": ["rename the function to solve"],
+            "llm_signals": ["structured_output"],
+        },
+    )
+
+    assert result.root_cause == "contract_or_interface_violation"
+
+
+def test_build_final_case_result_coerces_bug_label_to_incomplete_solution_for_missing_code():
+    case = make_case()
+    findings = DeterministicFindings(
+        signals=["missing_code", "signature_mismatch", "entrypoint_mismatch", "api_mismatch"],
+        root_cause_hint="incomplete_or_truncated_solution",
+        findings={"parse_status": "no_code"},
+    )
+
+    result = build_final_case_result(
+        case,
+        findings,
+        llm_result={
+            "root_cause": "implementation_bug",
+            "secondary_cause": None,
+            "failure_stage": "implementation",
+            "summary": "Implementation bug.",
+            "explanation": "The code is buggy.",
+            "observable_evidence": ["no executable code block was produced"],
+            "evidence_refs": ["deterministic_findings.parse_status"],
+            "deterministic_alignment": "partially_consistent",
+            "confidence": 0.72,
+            "needs_human_review": False,
+            "review_reason": None,
+            "improvement_hints": ["produce the full final code"],
+            "llm_signals": ["structured_output"],
+        },
+    )
+
+    assert result.root_cause == "incomplete_or_truncated_solution"
