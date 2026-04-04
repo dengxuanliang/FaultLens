@@ -1,3 +1,5 @@
+import os
+
 from faultlens.config import load_settings
 from faultlens.env import load_dotenv
 
@@ -48,3 +50,15 @@ def test_load_settings_reads_scaling_defaults(tmp_path):
     assert settings.llm_retry_on_5xx is False
     assert settings.resume is True
     assert settings.enable_checkpoints is False
+
+
+def test_tests_do_not_inherit_real_llm_credentials_from_shell(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    settings = load_settings()
+
+    assert os.environ.get("FAULTLENS_API_KEY") is None
+    assert os.environ.get("FAULTLENS_BASE_URL") is None
+    assert os.environ.get("FAULTLENS_MODEL") is None
+    assert settings.api_key is None
+    assert settings.base_url is None
+    assert settings.model is None

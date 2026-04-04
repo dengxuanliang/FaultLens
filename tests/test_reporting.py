@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from faultlens.models import AttributionResult
 from faultlens.reporting.aggregate import summarize_cases
 from faultlens.reporting.render import render_analysis_report, render_case_report, render_hierarchical_root_cause_report
@@ -62,6 +64,34 @@ def make_result(
     )
 
 
+def make_non_attributable_result(
+    case_id: str,
+    *,
+    case_status: str,
+    accepted: bool | None,
+    needs_human_review: bool = False,
+) -> AttributionResult:
+    return AttributionResult(
+        case_id=case_id,
+        case_status=case_status,
+        accepted=accepted,
+        root_cause=None,
+        deterministic_signals=["metadata_conflict"] if case_status != "passed" else [],
+        llm_signals=[],
+        observable_evidence=["join incomplete"] if case_status != "passed" else [],
+        evidence_refs=[{"source": "ingest"}] if case_status != "passed" else [],
+        deterministic_findings={"test_status": "not_run"},
+        llm_judgment=None,
+        final_decision_source="deterministic_only",
+        confidence=0.2 if needs_human_review else None,
+        needs_human_review=needs_human_review,
+        review_reason=case_status if needs_human_review else None,
+        improvement_hints=[],
+        explanation=f"case marked as {case_status}",
+        hierarchical_cause={},
+    )
+
+
 def test_summarize_cases_counts_root_causes_and_signals():
     summary = summarize_cases(
         [
@@ -103,8 +133,9 @@ def test_render_reports_contain_required_sections():
     assert "# LLM 警告" in report
     assert "结论：" in report
     assert "●●●●●●●●●●" in report or "●●●●●○○○○○" in report or "●●○○○○○○○○" in report
-    assert "| 类别 | 数量 | 占整体错题比例 | 图示 |" in report
-    assert "| 待复核数量 | 占整体错题比例 | 图示 | Case IDs |" in report
+    assert "| 类别 | 数量 | 占失败样本比例 | 图示 |" in report
+    assert "| 类别 | 数量 | 占可归因失败比例 | 图示 |" in report
+    assert "| 待复核数量 | 占失败样本比例 | 图示 | Case IDs |" in report
     assert "100.0%" in report
     assert "# 三层错因总览" in hierarchy_report
     assert "# 方法说明" in hierarchy_report
@@ -166,3 +197,30 @@ def test_render_analysis_report_surfaces_llm_job_backlog():
     assert "llm_running" in report
     assert "llm_failed_retryable" in report
     assert "待处理 LLM backlog：9" in report
+
+
+def test_render_analysis_report_uses_section_specific_denominators():
+    results = [
+        make_result("1", "solution_incorrect"),
+        make_non_attributable_result("2", case_status="data_issue", accepted=False, needs_human_review=True),
+        make_non_attributable_result("3", case_status="passed", accepted=True),
+    ]
+    summary = summarize_cases(results)
+
+    report = render_analysis_report(
+        summary,
+        results,
+        run_context={
+            "input_files": ["inference.jsonl", "results.jsonl"],
+            "role_detection": {"inference.jsonl": "inference", "results.jsonl": "results"},
+            "join_stats": {"joined": 3, "join_issue": 0},
+            "case_counts": {"attributable_failure": 1, "data_issue": 1, "passed": 1},
+            "model_summary": "deterministic-only",
+            "llm_max_workers": 1,
+        },
+    )
+
+    assert "| 类别 | 数量 | 占可归因失败比例 | 图示 |" in report
+    assert "| 待复核数量 | 占失败样本比例 | 图示 | Case IDs |" in report
+    assert "解答逻辑错误 | 1 | 100.0%" in report
+    assert "| 1 | 50.0% |" in report

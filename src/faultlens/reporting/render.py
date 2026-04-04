@@ -10,7 +10,8 @@ from faultlens.reporting.labels import display_case_status, display_root_cause, 
 
 def render_analysis_report(summary: SummaryReport, results: list[AttributionResult], run_context: dict | None = None) -> str:
     run_context = run_context or {}
-    total_failures = summary.total_cases
+    failed_cases = summary.failed_cases
+    attributable_failures = summary.attributable_failure_cases
     sections = [
         "# 运行摘要\n"
         f"- 输入文件：{', '.join(run_context.get('input_files', [])) or 'unknown'}\n"
@@ -19,15 +20,17 @@ def render_analysis_report(summary: SummaryReport, results: list[AttributionResu
         f"- 案例统计：{_format_case_counts(run_context.get('case_counts', {}))}\n"
         f"- 模型配置：{run_context.get('model_summary', 'deterministic-only')}\n"
         f"- LLM 并发数：{run_context.get('llm_max_workers', 1)}\n"
-        f"- 案例总数：{summary.total_cases}",
+        f"- 案例总数：{summary.total_cases}\n"
+        f"- 失败样本数：{failed_cases}\n"
+        f"- 可归因失败数：{attributable_failures}",
         "# 任务状态\n" + _format_job_status_section(run_context),
-        "# 确定性分析摘要\n" + _format_signal_mapping(summary.deterministic_signal_counts, total=total_failures),
-        "# LLM 根因分布\n" + _format_root_cause_mapping(summary.root_cause_counts, total=total_failures),
-        "# 三层错因聚合\n" + _format_hierarchy_summary(summary, total=total_failures),
-        "# 交叉分析\n" + _format_nested_mapping(summary.cross_analysis, total=total_failures),
-        "# 切片分析\n" + _format_slice_mapping(summary.slices, total=total_failures),
-        "# 代表性案例\n" + _format_root_cause_mapping({key: len(value) for key, value in summary.exemplars.items()}, total=total_failures),
-        "# 待人工复核\n" + _format_review_queue_summary(summary.review_queue, total=total_failures),
+        "# 确定性分析摘要\n" + _format_signal_mapping(summary.deterministic_signal_counts, total=failed_cases),
+        "# LLM 根因分布\n" + _format_root_cause_mapping(summary.root_cause_counts, total=attributable_failures),
+        "# 三层错因聚合\n" + _format_hierarchy_summary(summary, total=attributable_failures),
+        "# 交叉分析\n" + _format_nested_mapping(summary.cross_analysis, total=attributable_failures),
+        "# 切片分析\n" + _format_slice_mapping(summary.slices, total=attributable_failures),
+        "# 代表性案例\n" + _format_root_cause_mapping({key: len(value) for key, value in summary.exemplars.items()}, total=attributable_failures),
+        "# 待人工复核\n" + _format_review_queue_summary(summary.review_queue, total=failed_cases),
         "# 输入警告\n" + ("\n".join(f"- {item}" for item in run_context.get("input_warnings", [])) if run_context.get("input_warnings") else "- 无"),
         "# LLM 响应质量\n" + _format_llm_response_stats(run_context.get("llm_response_stats")),
         "# LLM 警告\n" + ("\n".join(f"- {item}" for item in run_context.get("llm_warnings", [])) if run_context.get("llm_warnings") else "- 无"),
@@ -119,6 +122,7 @@ def _format_root_cause_mapping(mapping: dict, *, total: int) -> str:
     return _format_distribution_block(
         [(display_root_cause(key), value) for key, value in mapping.items()],
         total=total,
+        percent_label="占可归因失败比例",
     )
 
 
@@ -129,6 +133,7 @@ def _format_signal_mapping(mapping: dict, *, total: int) -> str:
     return _format_distribution_block(
         [(display_signal(key), value) for key, value in mapping.items()],
         total=total,
+        percent_label="占失败样本比例",
     )
 
 
@@ -143,6 +148,7 @@ def _format_nested_mapping(mapping: dict, *, total: int) -> str:
             _format_distribution_block(
                 [(display_root_cause(inner), count) for inner, count in value.items()],
                 total=total,
+                percent_label="占可归因失败比例",
             )
         )
     return "\n".join(lines)
@@ -161,6 +167,7 @@ def _format_slice_mapping(mapping: dict, *, total: int) -> str:
                 _format_distribution_block(
                     [(display_root_cause(root), count) for root, count in counts.items()],
                     total=total,
+                    percent_label="占可归因失败比例",
                 )
             )
     return "\n".join(lines)
@@ -232,6 +239,7 @@ def _format_hierarchy_mapping(mapping: dict, *, level: str | None = None, total:
             for item, count in mapping.items()
         ],
         total=total,
+        percent_label="占可归因失败比例",
     )
 
 
@@ -247,10 +255,10 @@ def _format_hierarchy_summary(summary: SummaryReport, *, total: int) -> str:
     return "\n".join(sections)
 
 
-def _format_count_share_table(rows: list[tuple[str, int]], *, total: int) -> str:
+def _format_count_share_table(rows: list[tuple[str, int]], *, total: int, percent_label: str) -> str:
     if not rows:
         return "- 无"
-    lines = ["| 类别 | 数量 | 占整体错题比例 | 图示 |", "| --- | --- | --- | --- |"]
+    lines = [f"| 类别 | 数量 | {percent_label} | 图示 |", "| --- | --- | --- | --- |"]
     for label, count in _sort_rows(rows):
         lines.append(f"| {label} | {count} | {_format_percent(count, total)} | {_make_bar(count, total)} |")
     return "\n".join(lines)
@@ -266,40 +274,45 @@ def _format_review_queue_summary(case_ids: list[str], *, total: int) -> str:
     if not case_ids:
         return (
             "结论：当前没有样本进入人工复核。\n\n"
-            "| 待复核数量 | 占整体错题比例 | 图示 | Case IDs |\n| --- | --- | --- | --- |\n| 0 | 0.0% |  | 无 |"
+            "| 待复核数量 | 占失败样本比例 | 图示 | Case IDs |\n| --- | --- | --- | --- |\n| 0 | 0.0% |  | 无 |"
         )
     joined = ", ".join(str(case_id) for case_id in case_ids)
     count = len(case_ids)
     percent = _format_percent(count, total)
     return (
-        f"结论：当前共有 {count} 个样本进入人工复核，占整体错题 {percent}。\n\n"
-        "| 待复核数量 | 占整体错题比例 | 图示 | Case IDs |\n"
+        f"结论：当前共有 {count} 个样本进入人工复核，占失败样本 {percent}。\n\n"
+        "| 待复核数量 | 占失败样本比例 | 图示 | Case IDs |\n"
         "| --- | --- | --- | --- |\n"
         f"| {count} | {percent} | {_make_bar(count, total)} | {joined} |"
     )
 
 
-def _format_distribution_block(rows: list[tuple[str, int]], *, total: int) -> str:
+def _format_distribution_block(rows: list[tuple[str, int]], *, total: int, percent_label: str) -> str:
     if not rows:
         return "- 无"
     sorted_rows = _sort_rows(rows)
-    return "\n".join([_build_distribution_conclusion(sorted_rows, total), "", _format_count_share_table(sorted_rows, total=total)])
+    return "\n".join([
+        _build_distribution_conclusion(sorted_rows, total, percent_label=percent_label),
+        "",
+        _format_count_share_table(sorted_rows, total=total, percent_label=percent_label),
+    ])
 
 
-def _build_distribution_conclusion(rows: list[tuple[str, int]], total: int) -> str:
+def _build_distribution_conclusion(rows: list[tuple[str, int]], total: int, *, percent_label: str) -> str:
     if not rows:
         return "结论：当前没有可展示的统计项。"
     top_count = rows[0][1]
     leaders = [label for label, count in rows if count == top_count]
     top_percent = _format_percent(top_count, total)
+    percent_subject = percent_label.removeprefix("占").removesuffix("比例")
     if len(rows) == 1:
-        return f"结论：当前统计全部集中在「{rows[0][0]}」，占整体错题 {top_percent}。"
+        return f"结论：当前统计全部集中在「{rows[0][0]}」，占{percent_subject} {top_percent}。"
     if len(leaders) == len(rows):
         return f"结论：当前各类别分布均匀，最高占比为 {top_percent}。"
     if len(leaders) == 1:
-        return f"结论：当前最突出的类别是「{leaders[0]}」，占整体错题 {top_percent}。"
+        return f"结论：当前最突出的类别是「{leaders[0]}」，占{percent_subject} {top_percent}。"
     leader_text = "、".join(f"「{label}」" for label in leaders)
-    return f"结论：当前最高频类别为 {leader_text}，并列占整体错题 {top_percent}。"
+    return f"结论：当前最高频类别为 {leader_text}，并列占{percent_subject} {top_percent}。"
 
 
 def _make_bar(count: int, total: int, *, width: int = 20) -> str:

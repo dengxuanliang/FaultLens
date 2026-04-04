@@ -9,6 +9,8 @@ from faultlens.models import AttributionResult, SummaryReport
 class SummaryAccumulator:
     def __init__(self) -> None:
         self.total_cases = 0
+        self.failed_cases = 0
+        self.attributable_failure_cases = 0
         self.root_counter = Counter()
         self.signal_counter = Counter()
         self.hierarchy_counters = {"l1": Counter(), "l2": Counter(), "l3": Counter()}
@@ -29,6 +31,10 @@ class SummaryAccumulator:
 
     def add(self, result: AttributionResult) -> None:
         self.total_cases += 1
+        if result.case_status != "passed":
+            self.failed_cases += 1
+        if result.case_status == "attributable_failure":
+            self.attributable_failure_cases += 1
         if result.root_cause:
             self.root_counter[result.root_cause] += 1
             if len(self.exemplars[result.root_cause]) < 3:
@@ -57,6 +63,8 @@ class SummaryAccumulator:
     def to_summary(self) -> SummaryReport:
         return SummaryReport(
             total_cases=self.total_cases,
+            failed_cases=self.failed_cases,
+            attributable_failure_cases=self.attributable_failure_cases,
             root_cause_counts=dict(self.root_counter),
             deterministic_signal_counts=dict(self.signal_counter),
             hierarchy_counts={level: dict(counter) for level, counter in self.hierarchy_counters.items()},

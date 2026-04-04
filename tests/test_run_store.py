@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sqlite3
 
 from faultlens.scale.run_store import RunStore
+from faultlens.scale.schema import SCHEMA_VERSION
 
 
 def test_run_store_initializes_required_tables(tmp_path: Path) -> None:
@@ -16,6 +18,7 @@ def test_run_store_initializes_required_tables(tmp_path: Path) -> None:
         "run_metadata",
         "input_files",
         "ingest_events",
+        "run_warnings",
         "joined_cases",
         "analysis_jobs",
         "deterministic_results",
@@ -118,3 +121,77 @@ def test_run_store_records_ingest_events(tmp_path: Path) -> None:
     assert len(events) == 1
     assert events[0]["event_type"] == "bad_json"
     assert events[0]["line_number"] == 3
+
+
+def test_run_store_records_run_warnings(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "run.db").open()
+    try:
+        store.record_run_warning(stage="preflight", message="schema outlier at line 1 in inference.jsonl")
+        warnings = store.list_run_warnings()
+    finally:
+        store.close()
+
+    assert warnings == [
+        {
+            "id": 1,
+            "stage": "preflight",
+            "severity": "warning",
+            "message": "schema outlier at line 1 in inference.jsonl",
+            "created_at": warnings[0]["created_at"],
+        }
+    ]
+
+
+def test_run_store_migrates_v1_database_to_latest_schema(tmp_path: Path) -> None:
+    db_path = tmp_path / "legacy.db"
+    connection = sqlite3.connect(str(db_path))
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE run_metadata (
+                run_id TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL,
+                faultlens_version TEXT,
+                schema_version INTEGER NOT NULL,
+                analysis_version TEXT NOT NULL,
+                prompt_version TEXT NOT NULL,
+                settings_json TEXT NOT NULL,
+                git_commit TEXT
+            );
+            INSERT INTO run_metadata(
+                run_id,
+                created_at,
+                faultlens_version,
+                schema_version,
+                analysis_version,
+                prompt_version,
+                settings_json,
+                git_commit
+            ) VALUES (
+                'legacy-run',
+                '2026-04-04T00:00:00+00:00',
+                '0.1.0',
+                1,
+                'det-v1',
+                'prompt-v1',
+                '{}',
+                NULL
+            );
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    store = RunStore(db_path).open()
+    try:
+        metadata = store.load_run_metadata()
+        tables = store.list_tables()
+        store.record_run_warning(stage="preflight", message="legacy warning")
+        warnings = store.list_run_warnings()
+    finally:
+        store.close()
+
+    assert metadata["schema_version"] == SCHEMA_VERSION
+    assert "run_warnings" in tables
+    assert warnings[0]["message"] == "legacy warning"

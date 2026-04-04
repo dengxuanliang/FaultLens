@@ -88,6 +88,9 @@ def run_analysis(
             ),
             encoding="utf-8",
         )
+        for warning in resolved.warnings:
+            run_store.record_run_warning(stage="preflight", message=warning, commit=False)
+        run_store.commit()
     if run_store.count_joined_cases() == 0:
         if resume_run:
             build_ingest_snapshot(run_store, resolved.inference_path, resolved.results_path)
@@ -254,7 +257,8 @@ def finalize_outputs(
         exemplar_ids = {item for ids in summary.exemplars.values() for item in ids[:1]}
         if case_id:
             exemplar_ids.add(str(case_id))
-        _render_selected_cases(output_dir / "case_analysis.jsonl", exemplar_ids, cases_dir, exemplars_dir)
+        _render_all_cases(output_dir / "case_analysis.jsonl", cases_dir)
+        _render_exemplar_cases(output_dir / "case_analysis.jsonl", exemplar_ids, exemplars_dir)
         return summary
     finally:
         if should_close:
@@ -663,7 +667,16 @@ def _export_case_analysis_from_store(run_store: RunStore, case_analysis_path: Pa
 
 
 
-def _render_selected_cases(case_analysis_path: Path, exemplar_ids: set[str], cases_dir: Path, exemplars_dir: Path) -> None:
+def _render_all_cases(case_analysis_path: Path, cases_dir: Path) -> None:
+    with case_analysis_path.open("r", encoding="utf-8") as handle:
+        for raw in handle:
+            row = json.loads(raw)
+            result = _result_from_row(row)
+            text = render_case_report(result)
+            (cases_dir / f"{result.case_id}.md").write_text(text, encoding="utf-8")
+
+
+def _render_exemplar_cases(case_analysis_path: Path, exemplar_ids: set[str], exemplars_dir: Path) -> None:
     if not exemplar_ids:
         return
     with case_analysis_path.open("r", encoding="utf-8") as handle:
@@ -672,9 +685,8 @@ def _render_selected_cases(case_analysis_path: Path, exemplar_ids: set[str], cas
             if str(row.get("case_id")) not in exemplar_ids:
                 continue
             result = _result_from_row(row)
-            text = render_case_report(result)
-            (cases_dir / f"{result.case_id}.md").write_text(text, encoding="utf-8")
             if result.root_cause:
+                text = render_case_report(result)
                 slug = result.root_cause.replace("/", "-")
                 (exemplars_dir / f"{slug}-{result.case_id}.md").write_text(text, encoding="utf-8")
 
@@ -703,7 +715,9 @@ def _build_run_context(
     metadata = run_store.load_run_metadata()
     stored_settings = metadata.get("settings_json") or {}
     input_files = run_store.load_input_files()
-    input_warnings = [row["message"] for row in run_store.list_ingest_events()]
+    input_warnings = [row["message"] for row in run_store.list_run_warnings()] + [
+        row["message"] for row in run_store.list_ingest_events()
+    ]
     job_status_counts = run_store.count_jobs_by_status()
     case_counts = {"passed": 0, "attributable_failure": 0, "data_issue": 0, "join_issue": 0}
     for row in run_store.iter_final_result_rows():

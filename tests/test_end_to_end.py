@@ -39,6 +39,7 @@ def test_cli_analyze_generates_outputs(tmp_path: Path, fixtures_dir: Path, monke
     assert (output_dir / "case_analysis.jsonl").exists()
     assert (output_dir / "summary.json").exists()
     assert (output_dir / "run_metadata.json").exists()
+    assert (output_dir / "cases" / "1.md").exists()
     assert (output_dir / "cases" / "2.md").exists()
     exemplar_dir = output_dir / "exemplars"
     assert exemplar_dir.exists()
@@ -52,10 +53,15 @@ def test_cli_analyze_generates_outputs(tmp_path: Path, fixtures_dir: Path, monke
     assert "# 代表性案例" in report_text
     assert "# 待人工复核" in report_text
     assert "结论：" in report_text
-    assert "●●●●●○○○○○" in report_text or "●●○○○○○○○○" in report_text
-    assert "| 类别 | 数量 | 占整体错题比例 | 图示 |" in report_text
-    assert "| 待复核数量 | 占整体错题比例 | 图示 | Case IDs |" in report_text
+    assert "●●●●●●●●●●" in report_text or "●●●●●○○○○○" in report_text or "●●○○○○○○○○" in report_text
+    assert "| 类别 | 数量 | 占失败样本比例 | 图示 |" in report_text
+    assert "| 类别 | 数量 | 占可归因失败比例 | 图示 |" in report_text
+    assert "| 待复核数量 | 占失败样本比例 | 图示 | Case IDs |" in report_text
     assert "%" in report_text
+
+    case_one_text = (output_dir / "cases" / "1.md").read_text(encoding="utf-8")
+    assert "## 基本信息" in case_one_text
+    assert "## 根因" in case_one_text
 
     case_text = (output_dir / "cases" / "2.md").read_text(encoding="utf-8")
     assert "## 根因" in case_text
@@ -66,6 +72,9 @@ def test_cli_analyze_generates_outputs(tmp_path: Path, fixtures_dir: Path, monke
 
     rows = [json.loads(line) for line in (output_dir / "case_analysis.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
     assert {row["case_id"] for row in rows} == {"1", "2"}
+    assert {
+        path.stem for path in (output_dir / "cases").glob("*.md")
+    } == {row["case_id"] for row in rows}
     failure = next(row for row in rows if row["case_id"] == "2")
     l1_code = failure["hierarchical_cause"]["l1"]["code"]
     assert l1_code in {"functional_semantic_error", "environment_evaluation_mismatch"}
@@ -532,3 +541,34 @@ def test_case_output_persists_request_error_response_body(tmp_path: Path, fixtur
     raw_response_path = output_dir / "llm_raw_responses" / "2.txt"
     assert raw_response_path.exists()
     assert raw_response_path.read_text(encoding="utf-8") == error_body
+
+
+def test_role_detection_warnings_are_persisted_into_run_metadata_and_report(tmp_path: Path):
+    output_dir = tmp_path / "outputs"
+    inference_path = tmp_path / "inference.jsonl"
+    results_path = tmp_path / "results.jsonl"
+    inference_path.write_text(
+        '{"junk": 1}\n'
+        '{"id":"1","content":"task","canonical_solution":"def solve():\\n    return 1","completion":"def solve():\\n    return 0"}\n',
+        encoding="utf-8",
+    )
+    results_path.write_text('{"task_id":"1","accepted":false}\n', encoding="utf-8")
+
+    exit_code = main(
+        [
+            "analyze",
+            "--input",
+            str(inference_path),
+            str(results_path),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+
+    run_metadata = json.loads((output_dir / "run_metadata.json").read_text(encoding="utf-8"))
+    report_text = (output_dir / "analysis_report.md").read_text(encoding="utf-8")
+
+    assert "schema outlier at line 1 in inference.jsonl" in run_metadata["input_warnings"]
+    assert "schema outlier at line 1 in inference.jsonl" in report_text

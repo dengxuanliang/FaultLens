@@ -263,6 +263,45 @@ class RunStore:
         ).fetchall()
         return [dict(row) for row in rows]
 
+    def record_run_warning(
+        self,
+        *,
+        stage: str,
+        message: str,
+        severity: str = "warning",
+        commit: bool = True,
+    ) -> None:
+        connection = self._require_connection()
+        connection.execute(
+            """
+            INSERT INTO run_warnings(
+                stage,
+                severity,
+                message,
+                created_at
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (stage, severity, message, _utcnow_iso()),
+        )
+        if commit:
+            connection.commit()
+
+    def list_run_warnings(self) -> list[dict[str, Any]]:
+        connection = self._require_connection()
+        rows = connection.execute(
+            """
+            SELECT
+                id,
+                stage,
+                severity,
+                message,
+                created_at
+            FROM run_warnings
+            ORDER BY id
+            """
+        ).fetchall()
+        return [dict(row) for row in rows]
+
     def assert_resume_safe(
         self,
         *,

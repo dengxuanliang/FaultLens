@@ -27,7 +27,7 @@ FaultLens provides the following core capabilities:
   - canonical/reference diff summaries
 - optionally calls an LLM for higher-level root-cause attribution
 - aggregates wrong-answer causes into three-layer cause/capability views for reporting
-- writes batch reports, per-case markdown reports, structured JSON outputs, and raw LLM evidence
+- writes batch reports, full per-case markdown reports, structured JSON outputs, and raw LLM evidence
 - persists a durable `run.db` state store so long runs can resume and rerender from local state
 
 ## Acceptance status
@@ -155,7 +155,7 @@ A normal analysis run writes:
 - `summary.json`
 - `run_metadata.json`
 - `hierarchical_root_cause_report.md`
-- `cases/<case_id>.md`
+- `cases/<case_id>.md` for every finalized case
 - `exemplars/*.md`
 - `llm_raw_responses/<case_id>.txt` when an LLM raw reply or error body is available
 
@@ -172,7 +172,7 @@ If an LLM request fails with a provider response body, FaultLens persists that r
 - `analysis_report.md`: top-level delivery report, including case distribution, root-cause distribution, input warnings, LLM quality stats, and current job backlog
 - `hierarchical_root_cause_report.md`: three-layer cause and capability aggregation report
 - `case_analysis.jsonl`: machine-readable per-case final results
-- `cases/<case_id>.md`: detailed per-case analysis
+- `cases/<case_id>.md`: detailed per-case analysis for every finalized case
 - `run_metadata.json`: run-level metadata for validation and operations
 - `run.db`: durable working state and the source of truth for resume/rerender
 
@@ -237,7 +237,7 @@ FaultLens is productized around durable local batch analysis, but the following 
 The current repository state has full test verification on `main`:
 
 - `pytest -q`
-- latest verified result: `96 passed`
+- latest verified result: `100 passed`
 
 ## Tests
 

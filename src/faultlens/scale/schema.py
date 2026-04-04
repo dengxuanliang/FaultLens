@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
-SCHEMA_SQL = """
+BASE_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS run_metadata (
     run_id TEXT PRIMARY KEY,
     created_at TEXT NOT NULL,
@@ -123,5 +123,77 @@ CREATE INDEX IF NOT EXISTS idx_llm_attempts_case_id ON llm_attempts(case_id);
 """
 
 
+def _migration_1_to_2(connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS run_warnings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            stage TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            message TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+
+
+MIGRATIONS = {
+    1: _migration_1_to_2,
+}
+
+
 def initialize_schema(connection) -> None:
-    connection.executescript(SCHEMA_SQL)
+    current_version = _detect_schema_version(connection)
+    if current_version == 0:
+        connection.executescript(BASE_SCHEMA_SQL)
+        _set_schema_version(connection, 1)
+        current_version = 1
+
+    while current_version < SCHEMA_VERSION:
+        migration = MIGRATIONS.get(current_version)
+        if migration is None:
+            raise RuntimeError(f"missing schema migration from version {current_version}")
+        migration(connection)
+        current_version += 1
+        _set_schema_version(connection, current_version)
+
+    connection.executescript(BASE_SCHEMA_SQL)
+    if current_version >= 2:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS run_warnings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                stage TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                message TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+    connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+
+def _detect_schema_version(connection) -> int:
+    has_run_metadata = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'run_metadata' LIMIT 1"
+    ).fetchone()
+    if not has_run_metadata:
+        return 0
+
+    row = connection.execute("SELECT MAX(schema_version) AS value FROM run_metadata").fetchone()
+    if row is not None and row["value"] is not None:
+        return int(row["value"])
+
+    pragma_row = connection.execute("PRAGMA user_version").fetchone()
+    if pragma_row is None:
+        return 1
+    value = pragma_row[0] if not isinstance(pragma_row, dict) else pragma_row.get("user_version")
+    return int(value or 1)
+
+
+def _set_schema_version(connection, version: int) -> None:
+    if connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'run_metadata' LIMIT 1"
+    ).fetchone():
+        connection.execute("UPDATE run_metadata SET schema_version = ?", (version,))
+    connection.execute(f"PRAGMA user_version = {version}")

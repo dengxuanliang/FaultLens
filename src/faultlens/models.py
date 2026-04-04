@@ -85,6 +85,8 @@ class AttributionResult:
 @dataclass
 class SummaryReport:
     total_cases: int
+    failed_cases: int
+    attributable_failure_cases: int
     root_cause_counts: Dict[str, int]
     deterministic_signal_counts: Dict[str, int]
     hierarchy_counts: Dict[str, Dict[str, int]] = field(default_factory=dict)
