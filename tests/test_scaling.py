@@ -185,7 +185,7 @@ def test_cli_resume_rejects_runtime_setting_drift(tmp_path: Path):
         ]
     )
 
-    assert second == 1
+    assert second == 3
 
 
 def test_cli_retries_retryable_llm_jobs_only_after_backoff_window(tmp_path: Path, monkeypatch):
@@ -805,7 +805,7 @@ def test_cli_rejects_runs_larger_than_1000_cases(tmp_path: Path):
         ]
     )
 
-    assert exit_code == 1
+    assert exit_code == 3
 
 
 def test_cli_resume_processes_llm_pending_jobs_without_rerunning_deterministic(tmp_path: Path, monkeypatch):

@@ -9,6 +9,12 @@ from typing import Optional, Sequence
 from faultlens.config import load_settings
 from faultlens.orchestrator import diagnose_env, export_case_report, finalize_outputs, inspect_output, load_run_status, run_analysis
 
+EXIT_OK = 0
+EXIT_USAGE = 2
+EXIT_USER_ERROR = 3
+EXIT_INTEGRITY_ERROR = 4
+EXIT_MISSING_INPUT = 5
+
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -39,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = subparsers.add_parser("status", help="print run metadata, health summary, and backlog state as JSON")
     status.add_argument("--output-dir", required=True)
+    status.add_argument("--pretty", action="store_true", help="render a human-readable terminal summary instead of JSON")
 
     inspect_dir = subparsers.add_parser("inspect-output", help="validate exported artifact integrity and consistency")
     inspect_dir.add_argument("--output-dir", required=True)
@@ -63,22 +70,25 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         if args.command == "rerender":
             finalize_outputs(output_dir=Path(args.output_dir))
-            return 0
+            return EXIT_OK
 
         if args.command == "status":
             status_payload = load_run_status(output_dir=Path(args.output_dir))
-            print(json.dumps(status_payload, ensure_ascii=False, indent=2))
-            return 0
+            if args.pretty:
+                print(_render_pretty_status(status_payload))
+            else:
+                print(json.dumps(status_payload, ensure_ascii=False, indent=2))
+            return EXIT_OK
 
         if args.command == "inspect-output":
             payload = inspect_output(output_dir=Path(args.output_dir))
             print(json.dumps(payload, ensure_ascii=False, indent=2))
-            return 0 if payload.get("healthy") else 1
+            return EXIT_OK if payload.get("healthy") else EXIT_INTEGRITY_ERROR
 
         if args.command == "diagnose-env":
             payload = diagnose_env(output_dir=Path(args.output_dir))
             print(json.dumps(payload, ensure_ascii=False, indent=2))
-            return 0
+            return EXIT_OK
 
         if args.command == "export-case":
             destination = export_case_report(
@@ -87,11 +97,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 dest=Path(args.dest) if args.dest else None,
             )
             print(destination)
-            return 0
+            return EXIT_OK
 
         if args.command != "analyze":
             parser.print_help()
-            return 2
+            return EXIT_USAGE
 
         settings = load_settings(
             env_path=Path(args.env_file) if args.env_file else None,
@@ -111,10 +121,33 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             output_dir=settings.output_dir,
             case_id=args.case_id,
         )
-        return 0
-    except (FileNotFoundError, KeyError, ValueError) as exc:
+        return EXIT_OK
+    except FileNotFoundError as exc:
         print(f"error: {exc}", file=sys.stderr)
-        return 1
+        return EXIT_MISSING_INPUT
+    except (KeyError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_USER_ERROR
+
+
+def _render_pretty_status(payload: dict) -> str:
+    health = payload.get("health_summary") or {}
+    lines = [
+        f"Run Health: {health.get('run_health', 'unknown')}",
+        f"Ready For Delivery: {'yes' if health.get('ready_for_delivery') else 'no'}",
+        f"Finalized Ratio: {health.get('finalized_ratio', '0.0%')}",
+        f"Pending LLM Backlog: {payload.get('pending_llm_backlog', 0)}",
+        f"Model Summary: {payload.get('model_summary', 'deterministic-only')}",
+        f"Case Counts: {payload.get('case_counts', {})}",
+        f"Job Status Counts: {payload.get('job_status_counts', {})}",
+    ]
+    blocking = health.get("blocking_issues") or []
+    warnings = health.get("warnings") or []
+    if blocking:
+        lines.append(f"Blocking Issues: {blocking}")
+    if warnings:
+        lines.append(f"Warnings: {warnings}")
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":

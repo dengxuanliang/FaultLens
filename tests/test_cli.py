@@ -135,6 +135,34 @@ def test_cli_status_includes_health_summary(tmp_path, fixtures_dir, capsys):
     assert "ready_for_delivery" in payload["health_summary"]
 
 
+def test_cli_status_supports_pretty_output(tmp_path, fixtures_dir, capsys):
+    output_dir = tmp_path / "outs"
+
+    analyze_exit = main([
+        "analyze",
+        "--input",
+        str(fixtures_dir / "inference_sample.jsonl"),
+        str(fixtures_dir / "results_sample.jsonl"),
+        "--output-dir",
+        str(output_dir),
+    ])
+    assert analyze_exit == 0
+
+    status_exit = main([
+        "status",
+        "--output-dir",
+        str(output_dir),
+        "--pretty",
+    ])
+
+    captured = capsys.readouterr()
+    assert status_exit == 0
+    assert "Run Health:" in captured.out
+    assert "Ready For Delivery:" in captured.out
+    assert "Pending LLM Backlog:" in captured.out
+    assert "Case Counts:" in captured.out
+
+
 def test_cli_supports_inspect_output_subcommand(tmp_path, fixtures_dir, capsys):
     output_dir = tmp_path / "outs"
 
@@ -184,8 +212,9 @@ def test_cli_inspect_output_detects_missing_artifacts(tmp_path, fixtures_dir, ca
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
-    assert inspect_exit == 1
+    assert inspect_exit == 4
     assert "summary.json" in payload["missing_artifacts"]
+    assert "run `faultlens rerender --output-dir ...` to regenerate report artifacts" in payload["recommended_actions"]
 
 
 def test_cli_inspect_output_detects_missing_manifest(tmp_path, fixtures_dir, capsys):
@@ -211,9 +240,10 @@ def test_cli_inspect_output_detects_missing_manifest(tmp_path, fixtures_dir, cap
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
-    assert inspect_exit == 1
+    assert inspect_exit == 4
     assert payload["consistency_checks"]["manifests"]["healthy"] is False
     assert "analysis_manifest.json" in payload["consistency_checks"]["manifests"]["missing"]
+    assert "rerun `faultlens analyze` with the original inputs to rebuild missing manifests" in payload["recommended_actions"]
 
 
 def test_cli_inspect_output_detects_case_markdown_mismatch(tmp_path, fixtures_dir, capsys):
@@ -239,10 +269,11 @@ def test_cli_inspect_output_detects_case_markdown_mismatch(tmp_path, fixtures_di
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
-    assert inspect_exit == 1
+    assert inspect_exit == 4
     assert payload["healthy"] is False
     assert payload["consistency_checks"]["case_markdown"]["healthy"] is False
     assert "2" in payload["consistency_checks"]["case_markdown"]["missing_case_ids"]
+    assert "run `faultlens rerender --output-dir ...` to rebuild per-case markdown exports" in payload["recommended_actions"]
 
 
 def test_cli_inspect_output_detects_summary_count_mismatch(tmp_path, fixtures_dir, capsys):
@@ -271,7 +302,7 @@ def test_cli_inspect_output_detects_summary_count_mismatch(tmp_path, fixtures_di
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
-    assert inspect_exit == 1
+    assert inspect_exit == 4
     assert payload["consistency_checks"]["summary"]["healthy"] is False
     assert payload["consistency_checks"]["summary"]["reported_total_cases"] == 999
     assert payload["consistency_checks"]["summary"]["derived_total_cases"] == 2
@@ -303,7 +334,7 @@ def test_cli_inspect_output_detects_run_metadata_case_count_mismatch(tmp_path, f
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
-    assert inspect_exit == 1
+    assert inspect_exit == 4
     assert payload["consistency_checks"]["run_metadata"]["healthy"] is False
     assert payload["consistency_checks"]["run_metadata"]["reported_case_counts"]["passed"] == 999
 
@@ -334,7 +365,7 @@ def test_cli_inspect_output_detects_missing_exemplar_file(tmp_path, fixtures_dir
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
-    assert inspect_exit == 1
+    assert inspect_exit == 4
     assert payload["consistency_checks"]["exemplars"]["healthy"] is False
     assert payload["consistency_checks"]["exemplars"]["rendered_count"] == 0
 
@@ -393,9 +424,35 @@ def test_cli_inspect_output_detects_missing_llm_raw_response_artifact(tmp_path, 
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
-    assert inspect_exit == 1
+    assert inspect_exit == 4
     assert payload["consistency_checks"]["llm_raw_responses"]["healthy"] is False
     assert payload["consistency_checks"]["llm_raw_responses"]["missing_paths"] == ["llm_raw_responses/2.txt"]
+    assert "missing raw LLM responses cannot be reconstructed from exported markdown; rerun `faultlens analyze --resume` or a fresh `analyze` if audit retention matters" in payload["recommended_actions"]
+
+
+def test_cli_inspect_output_reports_no_recommended_actions_when_healthy(tmp_path, fixtures_dir, capsys):
+    output_dir = tmp_path / "outs"
+
+    analyze_exit = main([
+        "analyze",
+        "--input",
+        str(fixtures_dir / "inference_sample.jsonl"),
+        str(fixtures_dir / "results_sample.jsonl"),
+        "--output-dir",
+        str(output_dir),
+    ])
+    assert analyze_exit == 0
+
+    inspect_exit = main([
+        "inspect-output",
+        "--output-dir",
+        str(output_dir),
+    ])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert inspect_exit == 0
+    assert payload["recommended_actions"] == []
 
 
 def test_cli_inspect_output_detects_unexpected_case_markdown_file(tmp_path, fixtures_dir, capsys):
@@ -421,7 +478,7 @@ def test_cli_inspect_output_detects_unexpected_case_markdown_file(tmp_path, fixt
 
     captured = capsys.readouterr()
     payload = json.loads(captured.out)
-    assert inspect_exit == 1
+    assert inspect_exit == 4
     assert payload["consistency_checks"]["case_markdown"]["healthy"] is False
     assert "999" in payload["consistency_checks"]["case_markdown"]["unexpected_case_ids"]
 
@@ -440,7 +497,7 @@ def test_cli_rejects_resume_when_output_dir_has_no_existing_run(tmp_path, fixtur
     ])
 
     captured = capsys.readouterr()
-    assert exit_code == 1
+    assert exit_code == 3
     assert "resume requested" in captured.err
 
 
@@ -457,9 +514,24 @@ def test_cli_prints_user_friendly_error_for_invalid_settings(tmp_path, fixtures_
     ])
 
     captured = capsys.readouterr()
-    assert exit_code == 1
+    assert exit_code == 3
     assert "llm_max_workers" in captured.err
     assert "Traceback" not in captured.err
+
+
+def test_cli_returns_distinct_exit_code_for_missing_input(tmp_path, fixtures_dir, capsys):
+    exit_code = main([
+        "analyze",
+        "--input",
+        str(tmp_path / "missing-a.jsonl"),
+        str(fixtures_dir / "results_sample.jsonl"),
+        "--output-dir",
+        str(tmp_path / "outs"),
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 5
+    assert "input file not found" in captured.err
 
 
 def test_cli_supports_export_case_subcommand(tmp_path, fixtures_dir):

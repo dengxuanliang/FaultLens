@@ -155,6 +155,14 @@ PYTHONPATH=src python3 -m faultlens.cli status \
 
 This prints the current run context as JSON, including case counts, `job_status_counts`, `pending_llm_backlog`, `health_summary`, warning summaries, stored model configuration, capability snapshot, and failure taxonomy.
 
+For a human-readable terminal summary instead of JSON:
+
+```bash
+PYTHONPATH=src python3 -m faultlens.cli status \
+  --output-dir ./outputs \
+  --pretty
+```
+
 ### Inspect output directory integrity
 
 To quickly validate whether an existing output directory still has the expected top-level artifacts:
@@ -176,6 +184,7 @@ This prints a small JSON health report and exits non-zero if required artifacts 
 - `input_manifest.json` and `analysis_manifest.json` presence
 
 If any of these drift, the command reports the exact mismatch and exits non-zero.
+When possible, it also returns `recommended_actions` describing whether `rerender`, `analyze --resume`, or a fresh `analyze` is the right next step.
 
 ### Diagnose local environment
 
@@ -300,7 +309,17 @@ FaultLens is aimed at durable local batch analysis, but the following boundaries
 The current repository state has fresh full-test verification on `main`:
 
 - `pytest -q`
-- latest verified result: `129 passed`
+- latest verified result: `133 passed`
+
+## Exit Codes
+
+CLI exit codes are intentionally stable for automation:
+
+- `0`: success
+- `2`: CLI usage / argument parsing error
+- `3`: user/configuration error
+- `4`: output integrity check failed
+- `5`: required input file missing
 
 ## Tests
 

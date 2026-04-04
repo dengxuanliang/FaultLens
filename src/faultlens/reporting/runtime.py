@@ -180,11 +180,16 @@ def inspect_output_dir(*, output_dir: Path) -> Dict[str, Any]:
     missing_artifacts = [name for name in required_files if not (output_dir / name).exists()]
     consistency_checks = _build_output_consistency_checks(output_dir)
     consistency_healthy = all(check.get("healthy", False) for check in consistency_checks.values())
+    recommended_actions = _build_inspect_recommendations(
+        missing_artifacts=missing_artifacts,
+        consistency_checks=consistency_checks,
+    )
     health = {
         "output_dir": str(output_dir),
         "healthy": not missing_artifacts and consistency_healthy,
         "missing_artifacts": missing_artifacts,
         "consistency_checks": consistency_checks,
+        "recommended_actions": recommended_actions,
         "faultlens_version": __version__,
         "git_commit": _detect_git_commit(output_dir),
     }
@@ -399,6 +404,48 @@ def _build_output_consistency_checks(output_dir: Path) -> Dict[str, Any]:
         "missing": manifest_missing,
     }
     return checks
+
+
+def _build_inspect_recommendations(*, missing_artifacts: list[str], consistency_checks: Dict[str, Any]) -> list[str]:
+    actions: list[str] = []
+    report_artifacts = {
+        "analysis_report.md",
+        "summary.json",
+        "run_metadata.json",
+        "case_analysis.jsonl",
+        "hierarchical_root_cause_report.md",
+    }
+    if any(name in report_artifacts for name in missing_artifacts):
+        actions.append("run `faultlens rerender --output-dir ...` to regenerate report artifacts")
+    if "run.db" in missing_artifacts:
+        actions.append("missing `run.db` cannot be repaired by rerender; rerun `faultlens analyze` with the original inputs")
+
+    manifests = consistency_checks.get("manifests") or {}
+    if not manifests.get("healthy", True):
+        actions.append("rerun `faultlens analyze` with the original inputs to rebuild missing manifests")
+
+    case_markdown = consistency_checks.get("case_markdown") or {}
+    if not case_markdown.get("healthy", True):
+        actions.append("run `faultlens rerender --output-dir ...` to rebuild per-case markdown exports")
+
+    summary = consistency_checks.get("summary") or {}
+    run_metadata = consistency_checks.get("run_metadata") or {}
+    exemplars = consistency_checks.get("exemplars") or {}
+    if not summary.get("healthy", True) or not run_metadata.get("healthy", True) or not exemplars.get("healthy", True):
+        actions.append("run `faultlens rerender --output-dir ...` to resynchronize summary, metadata, and exemplar exports")
+
+    raw_responses = consistency_checks.get("llm_raw_responses") or {}
+    if not raw_responses.get("healthy", True):
+        actions.append("missing raw LLM responses cannot be reconstructed from exported markdown; rerun `faultlens analyze --resume` or a fresh `analyze` if audit retention matters")
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for action in actions:
+        if action in seen:
+            continue
+        seen.add(action)
+        deduped.append(action)
+    return deduped
 
 
 def _build_capability_snapshot(settings: Dict[str, Any]) -> Dict[str, Any]:
