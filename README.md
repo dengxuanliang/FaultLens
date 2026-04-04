@@ -153,7 +153,7 @@ PYTHONPATH=src python3 -m faultlens.cli status \
   --output-dir ./outputs
 ```
 
-This prints the current run context as JSON, including case counts, job-status counts, pending LLM backlog, warning summaries, stored model configuration, capability snapshot, and failure taxonomy.
+This prints the current run context as JSON, including case counts, `job_status_counts`, `pending_llm_backlog`, `health_summary`, warning summaries, stored model configuration, capability snapshot, and failure taxonomy.
 
 ### Inspect output directory integrity
 
@@ -219,14 +219,14 @@ A normal analysis run writes:
 
 Structured outputs include:
 - `case_analysis.jsonl`: per-case attribution, parse mode, parse reason, raw-response path, raw-response sha256
-- `run_metadata.json`: join stats, model summary, LLM warning log, response-quality stats, `analysis_jobs` status distribution, pending LLM backlog
+- `run_metadata.json`: join stats, model summary, LLM warning log, response-quality stats, `job_status_counts`, `pending_llm_backlog`, and `health_summary`
 - `run_metadata.json` also carries provenance fields such as `faultlens_version` and `git_commit` when available
 
 If an LLM request fails with a provider response body, FaultLens persists that raw body into `llm_raw_responses/` for later manual audit.
 
 ### Key output files
 
-- `analysis_report.md`: top-level delivery report, including case distribution, root-cause distribution, input warnings, LLM quality stats, and current job backlog
+- `analysis_report.md`: top-level delivery report, including case distribution, root-cause distribution, health summary, input warnings, LLM quality stats, and current job backlog
 - `hierarchical_root_cause_report.md`: three-layer cause and capability aggregation report
 - `case_analysis.jsonl`: machine-readable per-case final results
 - `cases/<case_id>.md`: detailed per-case analysis for every finalized case
@@ -235,7 +235,7 @@ If an LLM request fails with a provider response body, FaultLens persists that r
 
 ### Job-state interpretation
 
-`run_metadata.json` and `analysis_report.md` expose `analysis_jobs` state counts.
+`run_metadata.json` and `analysis_report.md` expose `job_status_counts`.
 
 Important states:
 
@@ -253,6 +253,12 @@ Important states:
 - `llm_failed_retryable`
 
 If backlog is non-zero, the run still has unfinished or retry-waiting LLM work even if deterministic fallback results already exist.
+
+`health_summary` is the higher-level operator view:
+- `run_health`: `healthy`, `warning`, or `blocked`
+- `ready_for_delivery`: whether export state is deliverable without known blockers
+- `finalized_ratio`: finalized job coverage over total cases
+- `blocking_issues` / `warnings`: short human-readable summaries
 
 ## Scaling and stability
 

@@ -24,6 +24,7 @@ def render_analysis_report(summary: SummaryReport, results: list[AttributionResu
         f"- 案例总数：{summary.total_cases}\n"
         f"- 失败样本数：{failed_cases}\n"
         f"- 可归因失败数：{attributable_failures}",
+        "# 健康摘要\n" + _format_health_summary(run_context.get("health_summary")),
         "# 任务状态\n" + _format_job_status_section(run_context),
         "# 能力快照\n" + _format_capability_snapshot(run_context.get("capability_snapshot")),
         "# 失败分类\n" + _format_failure_taxonomy(run_context.get("failure_taxonomy")),
@@ -249,6 +250,21 @@ def _format_job_status_section(run_context: dict) -> str:
         f"- job_status_counts: {counts if counts else '无'}",
         f"- 待处理 LLM backlog：{run_context.get('pending_llm_backlog', 0)}",
     ]
+    return "\n".join(lines)
+
+
+def _format_health_summary(summary: dict | None) -> str:
+    if not summary:
+        return "- 无"
+    lines = [
+        f"- 运行健康度：{summary.get('run_health', 'unknown')}",
+        f"- 可交付：{'是' if summary.get('ready_for_delivery') else '否'}",
+        f"- finalized 覆盖率：{summary.get('finalized_ratio', '0.0%')}",
+    ]
+    blocking_issues = summary.get("blocking_issues") or []
+    warnings = summary.get("warnings") or []
+    lines.append(f"- 阻塞项：{blocking_issues if blocking_issues else '无'}")
+    lines.append(f"- 告警项：{warnings if warnings else '无'}")
     return "\n".join(lines)
 
 

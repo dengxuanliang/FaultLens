@@ -514,6 +514,9 @@ def test_run_metadata_includes_capability_snapshot_and_failure_taxonomy(tmp_path
     assert "python" in run_metadata["capability_snapshot"]["runners"]
     assert run_metadata["failure_taxonomy"]["case_status_counts"]["attributable_failure"] >= 1
     assert "retryable" in run_metadata["failure_taxonomy"]["llm"]
+    assert run_metadata["health_summary"]["run_health"] in {"healthy", "warning", "blocked"}
+    assert isinstance(run_metadata["health_summary"]["blocking_issues"], list)
+    assert isinstance(run_metadata["health_summary"]["warnings"], list)
 
 
 def test_run_metadata_includes_provenance_fields(tmp_path: Path, fixtures_dir: Path):

@@ -108,6 +108,33 @@ def test_cli_supports_status_subcommand(tmp_path, fixtures_dir):
     assert status_exit == 0
 
 
+def test_cli_status_includes_health_summary(tmp_path, fixtures_dir, capsys):
+    output_dir = tmp_path / "outs"
+
+    analyze_exit = main([
+        "analyze",
+        "--input",
+        str(fixtures_dir / "inference_sample.jsonl"),
+        str(fixtures_dir / "results_sample.jsonl"),
+        "--output-dir",
+        str(output_dir),
+    ])
+    assert analyze_exit == 0
+
+    status_exit = main([
+        "status",
+        "--output-dir",
+        str(output_dir),
+    ])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert status_exit == 0
+    assert payload["health_summary"]["run_health"] in {"healthy", "warning", "blocked"}
+    assert payload["health_summary"]["finalized_ratio"].endswith("%")
+    assert "ready_for_delivery" in payload["health_summary"]
+
+
 def test_cli_supports_inspect_output_subcommand(tmp_path, fixtures_dir, capsys):
     output_dir = tmp_path / "outs"
 
@@ -159,6 +186,34 @@ def test_cli_inspect_output_detects_missing_artifacts(tmp_path, fixtures_dir, ca
     payload = json.loads(captured.out)
     assert inspect_exit == 1
     assert "summary.json" in payload["missing_artifacts"]
+
+
+def test_cli_inspect_output_detects_missing_manifest(tmp_path, fixtures_dir, capsys):
+    output_dir = tmp_path / "outs"
+
+    analyze_exit = main([
+        "analyze",
+        "--input",
+        str(fixtures_dir / "inference_sample.jsonl"),
+        str(fixtures_dir / "results_sample.jsonl"),
+        "--output-dir",
+        str(output_dir),
+    ])
+    assert analyze_exit == 0
+
+    (output_dir / "analysis_manifest.json").unlink()
+
+    inspect_exit = main([
+        "inspect-output",
+        "--output-dir",
+        str(output_dir),
+    ])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert inspect_exit == 1
+    assert payload["consistency_checks"]["manifests"]["healthy"] is False
+    assert "analysis_manifest.json" in payload["consistency_checks"]["manifests"]["missing"]
 
 
 def test_cli_inspect_output_detects_case_markdown_mismatch(tmp_path, fixtures_dir, capsys):
@@ -341,6 +396,34 @@ def test_cli_inspect_output_detects_missing_llm_raw_response_artifact(tmp_path, 
     assert inspect_exit == 1
     assert payload["consistency_checks"]["llm_raw_responses"]["healthy"] is False
     assert payload["consistency_checks"]["llm_raw_responses"]["missing_paths"] == ["llm_raw_responses/2.txt"]
+
+
+def test_cli_inspect_output_detects_unexpected_case_markdown_file(tmp_path, fixtures_dir, capsys):
+    output_dir = tmp_path / "outs"
+
+    analyze_exit = main([
+        "analyze",
+        "--input",
+        str(fixtures_dir / "inference_sample.jsonl"),
+        str(fixtures_dir / "results_sample.jsonl"),
+        "--output-dir",
+        str(output_dir),
+    ])
+    assert analyze_exit == 0
+
+    (output_dir / "cases" / "999.md").write_text("# stray\n", encoding="utf-8")
+
+    inspect_exit = main([
+        "inspect-output",
+        "--output-dir",
+        str(output_dir),
+    ])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert inspect_exit == 1
+    assert payload["consistency_checks"]["case_markdown"]["healthy"] is False
+    assert "999" in payload["consistency_checks"]["case_markdown"]["unexpected_case_ids"]
 
 
 def test_cli_rejects_resume_when_output_dir_has_no_existing_run(tmp_path, fixtures_dir, capsys):

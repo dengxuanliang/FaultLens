@@ -54,6 +54,12 @@ def build_run_context(
         run_warnings=run_warnings,
         ingest_events=ingest_events,
     )
+    health_summary = _build_health_summary(
+        summary=summary,
+        case_counts=case_counts,
+        job_status_counts=job_status_counts,
+        input_warnings=input_warnings,
+    )
     return {
         "input_files": [item["path"] for item in input_files],
         "role_detection": {item["path"]: item["detected_role"] for item in input_files},
@@ -71,6 +77,7 @@ def build_run_context(
         "llm_max_workers": stored_settings.get("llm_max_workers"),
         "capability_snapshot": capability_snapshot,
         "failure_taxonomy": failure_taxonomy,
+        "health_summary": health_summary,
         "job_status_counts": job_status_counts,
         "pending_llm_backlog": sum(
             int(job_status_counts.get(status, 0))
@@ -452,6 +459,48 @@ def _build_failure_taxonomy(
             **warning_counts,
             "ingest": len(ingest_events),
         },
+    }
+
+
+def _build_health_summary(*, summary, case_counts: Dict[str, int], job_status_counts: Dict[str, int], input_warnings: list[str]) -> Dict[str, Any]:
+    total_cases = int(getattr(summary, "total_cases", 0) or 0)
+    finalized_count = int(job_status_counts.get("finalized", 0))
+    finalized_ratio_value = (finalized_count / total_cases * 100) if total_cases else 100.0
+    pending_backlog = sum(
+        int(job_status_counts.get(status, 0))
+        for status in ("llm_pending", "llm_running", "llm_failed_retryable")
+    )
+    terminal_failures = int(job_status_counts.get("llm_failed_terminal", 0))
+    review_queue = list(getattr(summary, "review_queue", []) or [])
+
+    blocking_issues: list[str] = []
+    warnings: list[str] = []
+    if pending_backlog > 0:
+        blocking_issues.append(f"pending llm backlog: {pending_backlog}")
+    if total_cases and finalized_count < total_cases:
+        blocking_issues.append(f"finalized coverage incomplete: {finalized_count}/{total_cases}")
+    if terminal_failures > 0:
+        warnings.append(f"terminal llm failures: {terminal_failures}")
+    if review_queue:
+        warnings.append(f"{len(review_queue)} case requires human review" if len(review_queue) == 1 else f"{len(review_queue)} cases require human review")
+    if input_warnings:
+        warnings.append(f"input warnings present: {len(input_warnings)}")
+
+    if blocking_issues:
+        run_health = "blocked"
+    elif warnings:
+        run_health = "warning"
+    else:
+        run_health = "healthy"
+
+    return {
+        "run_health": run_health,
+        "ready_for_delivery": not blocking_issues,
+        "finalized_ratio": f"{finalized_ratio_value:.1f}%",
+        "finalized_count": finalized_count,
+        "total_cases": total_cases,
+        "blocking_issues": blocking_issues,
+        "warnings": warnings,
     }
 
 

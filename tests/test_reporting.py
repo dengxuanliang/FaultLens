@@ -203,12 +203,44 @@ def test_render_analysis_report_surfaces_llm_job_backlog():
     )
 
     assert "# 任务状态" in report
+    assert "# 健康摘要" in report
     assert "# 能力快照" in report
     assert "# 失败分类" in report
     assert "llm_pending" in report
     assert "llm_running" in report
     assert "llm_failed_retryable" in report
     assert "待处理 LLM backlog：9" in report
+
+
+def test_render_analysis_report_surfaces_health_summary():
+    result = make_result("1", "solution_incorrect")
+    summary = summarize_cases([result])
+
+    report = render_analysis_report(
+        summary,
+        [result],
+        run_context={
+            "input_files": ["inference.jsonl", "results.jsonl"],
+            "role_detection": {"inference.jsonl": "inference", "results.jsonl": "results"},
+            "join_stats": {"joined": 1, "join_issue": 0},
+            "case_counts": {"attributable_failure": 1},
+            "model_summary": "deterministic-only",
+            "llm_max_workers": 1,
+            "health_summary": {
+                "run_health": "warning",
+                "ready_for_delivery": False,
+                "finalized_ratio": "50.0%",
+                "blocking_issues": ["pending llm backlog: 1"],
+                "warnings": ["1 case requires human review"],
+            },
+        },
+    )
+
+    assert "运行健康度：warning" in report
+    assert "可交付：否" in report
+    assert "finalized 覆盖率：50.0%" in report
+    assert "pending llm backlog: 1" in report
+    assert "1 case requires human review" in report
 
 
 def test_render_analysis_report_uses_section_specific_denominators():

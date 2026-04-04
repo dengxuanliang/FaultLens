@@ -12,38 +12,41 @@ from faultlens.orchestrator import diagnose_env, export_case_report, finalize_ou
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="faultlens")
+    parser = argparse.ArgumentParser(
+        prog="faultlens",
+        description="Deterministic-first CLI agent for paired code-evaluation JSONL analysis.",
+    )
     subparsers = parser.add_subparsers(dest="command")
 
-    analyze = subparsers.add_parser("analyze")
+    analyze = subparsers.add_parser("analyze", help="run ingest, deterministic analysis, LLM attribution, and export")
     analyze.add_argument("--input", nargs=2, required=True)
-    analyze.add_argument("--output-dir")
+    analyze.add_argument("--output-dir", help="directory for run.db and exported reports")
     analyze.add_argument("--case-id", help="export this case as an extra exemplar after the run completes")
-    analyze.add_argument("--env-file")
-    analyze.add_argument("--model")
-    analyze.add_argument("--base-url")
-    analyze.add_argument("--api-key")
+    analyze.add_argument("--env-file", help="optional dotenv file to load before resolving settings")
+    analyze.add_argument("--model", help="LLM model name; without full credentials FaultLens stays deterministic-only")
+    analyze.add_argument("--base-url", help="LLM provider base URL")
+    analyze.add_argument("--api-key", help="LLM provider API key")
     analyze.add_argument("--llm-max-workers", type=int)
     analyze.add_argument("--llm-max-retries", type=int)
     analyze.add_argument("--llm-retry-backoff-seconds", type=int)
     analyze.add_argument("--llm-retry-on-5xx", dest="llm_retry_on_5xx", action="store_true")
     analyze.add_argument("--no-llm-retry-on-5xx", dest="llm_retry_on_5xx", action="store_false")
     analyze.set_defaults(llm_retry_on_5xx=None)
-    analyze.add_argument("--resume", action="store_true")
+    analyze.add_argument("--resume", action="store_true", help="resume an existing run.db after strict input/config validation")
 
-    rerender = subparsers.add_parser("rerender")
+    rerender = subparsers.add_parser("rerender", help="rebuild reports from persisted run.db without rescanning inputs")
     rerender.add_argument("--output-dir", required=True)
 
-    status = subparsers.add_parser("status")
+    status = subparsers.add_parser("status", help="print run metadata, health summary, and backlog state as JSON")
     status.add_argument("--output-dir", required=True)
 
-    inspect_dir = subparsers.add_parser("inspect-output")
+    inspect_dir = subparsers.add_parser("inspect-output", help="validate exported artifact integrity and consistency")
     inspect_dir.add_argument("--output-dir", required=True)
 
-    diagnose = subparsers.add_parser("diagnose-env")
+    diagnose = subparsers.add_parser("diagnose-env", help="print a read-only local environment capability snapshot")
     diagnose.add_argument("--output-dir", required=True)
 
-    export_case = subparsers.add_parser("export-case")
+    export_case = subparsers.add_parser("export-case", help="rerender one case markdown from persisted state")
     export_case.add_argument("--output-dir", required=True)
     export_case.add_argument("--case-id", required=True)
     export_case.add_argument("--dest")
