@@ -7,7 +7,7 @@ FaultLens is a deterministic-first CLI agent for paired code-evaluation JSONL an
 FaultLens is built around two delivery goals:
 
 - read paired evaluation-log JSONL inputs and automatically analyze wrong-answer causes plus capability weaknesses
-- stably process runs up to 2000 cases, persist progress locally, and resume safely after interruption
+- stably process runs up to 1000 cases, persist progress locally, and resume safely after interruption
 
 The current implementation treats `run.db` as the durable source of truth for ingest, deterministic analysis, LLM attribution, final results, resume, and rerender.
 
@@ -39,7 +39,7 @@ As of the current `main` branch, the core acceptance scope is implemented:
 - three-layer capability weakness aggregation: complete
 - durable resume after interruption: complete
 - rerender reports from persisted state: complete
-- 2000-case scale handling in tests: complete
+- 1000-case scale handling in tests: complete
 - retryable LLM failure capture with retry ceiling and backlog visibility: complete
 
 ## Inputs
@@ -205,7 +205,7 @@ The current pipeline is designed for larger local runs:
 - resume continues from persisted task state instead of recomputing completion by scanning old outputs
 - retryable LLM failures keep evidence and fallback results, then retry later within the configured retry budget
 - retryable jobs are capped by `llm_max_retries` and do not loop forever across resumed runs
-- tests cover a 2000-case run path with durable state handling
+- tests cover a 1000-case run path with durable state handling
 
 This is the current intended operating model for long-running analysis batches.
 

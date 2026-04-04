@@ -33,6 +33,10 @@ class RunStore:
             self.connection.close()
             self.connection = None
 
+    def commit(self) -> None:
+        connection = self._require_connection()
+        connection.commit()
+
     def list_tables(self) -> set[str]:
         connection = self._require_connection()
         rows = connection.execute(
@@ -212,6 +216,7 @@ class RunStore:
         event_type: str,
         message: str,
         payload_excerpt: str | None = None,
+        commit: bool = True,
     ) -> None:
         connection = self._require_connection()
         connection.execute(
@@ -236,7 +241,8 @@ class RunStore:
                 _utcnow_iso(),
             ),
         )
-        connection.commit()
+        if commit:
+            connection.commit()
 
     def list_ingest_events(self) -> list[dict[str, Any]]:
         connection = self._require_connection()
@@ -284,7 +290,7 @@ class RunStore:
         if normalized_current != normalized_stored:
             raise ValueError("input manifest mismatch; resume is not safe")
 
-    def record_joined_case(self, case: dict[str, Any]) -> None:
+    def record_joined_case(self, case: dict[str, Any], *, commit: bool = True) -> None:
         connection = self._require_connection()
         now = _utcnow_iso()
         source = case.get("source", {}) or {}
@@ -327,7 +333,8 @@ class RunStore:
                 now,
             ),
         )
-        connection.commit()
+        if commit:
+            connection.commit()
 
     def iter_joined_cases(self):
         connection = self._require_connection()
@@ -350,7 +357,7 @@ class RunStore:
         row = connection.execute("SELECT COUNT(*) AS value FROM joined_cases").fetchone()
         return int(row["value"])
 
-    def ensure_analysis_job(self, *, case_id: str, job_status: str = "ingested") -> None:
+    def ensure_analysis_job(self, *, case_id: str, job_status: str = "ingested", commit: bool = True) -> None:
         connection = self._require_connection()
         now = _utcnow_iso()
         connection.execute(
@@ -385,7 +392,8 @@ class RunStore:
             """,
             (case_id, job_status, case_id, case_id, case_id, case_id, case_id, case_id, case_id, case_id, case_id, now, now),
         )
-        connection.commit()
+        if commit:
+            connection.commit()
 
     def count_jobs(self, status: str | None = None) -> int:
         connection = self._require_connection()
@@ -417,6 +425,7 @@ class RunStore:
         job_status: str,
         eligible_for_llm: bool,
         llm_required: bool,
+        commit: bool = True,
     ) -> None:
         connection = self._require_connection()
         connection.execute(
@@ -431,7 +440,8 @@ class RunStore:
             """,
             (job_status, int(eligible_for_llm), int(llm_required), _utcnow_iso(), case_id),
         )
-        connection.commit()
+        if commit:
+            connection.commit()
 
     def save_deterministic_result(
         self,
@@ -443,6 +453,7 @@ class RunStore:
         deterministic_findings: dict[str, Any],
         deterministic_root_cause_hint: str | None,
         analysis_version: str,
+        commit: bool = True,
     ) -> None:
         connection = self._require_connection()
         now = _utcnow_iso()
@@ -475,7 +486,8 @@ class RunStore:
                 now,
             ),
         )
-        connection.commit()
+        if commit:
+            connection.commit()
 
     def get_deterministic_result(self, case_id: str) -> dict[str, Any]:
         connection = self._require_connection()
@@ -546,7 +558,7 @@ class RunStore:
         )
         connection.commit()
 
-    def mark_job_llm_running(self, *, case_id: str, lease_token: str, lease_until: str) -> None:
+    def mark_job_llm_running(self, *, case_id: str, lease_token: str, lease_until: str, commit: bool = True) -> None:
         connection = self._require_connection()
         connection.execute(
             """
@@ -560,9 +572,10 @@ class RunStore:
             """,
             (lease_token, lease_until, _utcnow_iso(), case_id),
         )
-        connection.commit()
+        if commit:
+            connection.commit()
 
-    def mark_job_llm_done(self, case_id: str) -> None:
+    def mark_job_llm_done(self, case_id: str, *, commit: bool = True) -> None:
         connection = self._require_connection()
         connection.execute(
             """
@@ -575,7 +588,8 @@ class RunStore:
             """,
             (_utcnow_iso(), case_id),
         )
-        connection.commit()
+        if commit:
+            connection.commit()
 
     def mark_job_llm_failed(
         self,
@@ -584,6 +598,7 @@ class RunStore:
         retryable: bool,
         last_error: str | None,
         next_retry_at: str | None = None,
+        commit: bool = True,
     ) -> None:
         connection = self._require_connection()
         connection.execute(
@@ -605,9 +620,10 @@ class RunStore:
                 case_id,
             ),
         )
-        connection.commit()
+        if commit:
+            connection.commit()
 
-    def mark_job_finalized(self, case_id: str) -> None:
+    def mark_job_finalized(self, case_id: str, *, commit: bool = True) -> None:
         connection = self._require_connection()
         connection.execute(
             """
@@ -620,7 +636,8 @@ class RunStore:
             """,
             (_utcnow_iso(), case_id),
         )
-        connection.commit()
+        if commit:
+            connection.commit()
 
     def record_llm_attempt(
         self,
@@ -641,6 +658,7 @@ class RunStore:
         error_message: str | None,
         http_status: int | None,
         is_selected: bool = True,
+        commit: bool = True,
     ) -> int:
         connection = self._require_connection()
         request_messages_json = json.dumps(request_messages, ensure_ascii=False, sort_keys=True)
@@ -693,7 +711,8 @@ class RunStore:
                 int(is_selected),
             ),
         )
-        connection.commit()
+        if commit:
+            connection.commit()
         return int(cursor.lastrowid)
 
     def list_llm_attempts(self, case_id: str) -> list[dict[str, Any]]:
@@ -781,7 +800,7 @@ class RunStore:
         connection.commit()
         return int(cursor.rowcount)
 
-    def save_final_result(self, result_row: dict[str, Any]) -> None:
+    def save_final_result(self, result_row: dict[str, Any], *, commit: bool = True) -> None:
         connection = self._require_connection()
         now = _utcnow_iso()
         connection.execute(
@@ -813,7 +832,8 @@ class RunStore:
                 now,
             ),
         )
-        connection.commit()
+        if commit:
+            connection.commit()
 
     def iter_final_result_rows(self):
         connection = self._require_connection()

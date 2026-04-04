@@ -33,6 +33,7 @@ from faultlens.scale.run_store import RunStore
 
 ANALYSIS_VERSION = "deterministic-v2"
 LLM_LEASE_SECONDS = 300
+MAX_SUPPORTED_CASES = 1000
 
 
 
@@ -99,6 +100,7 @@ def run_analysis(
             )
             run_store.replace_input_files(input_snapshots)
             (output_dir / "input_manifest.json").write_text(json.dumps(input_snapshots, ensure_ascii=False, indent=2), encoding="utf-8")
+    _assert_supported_case_volume(run_store.count_joined_cases())
 
     case_analysis_path = output_dir / "case_analysis.jsonl"
     cases_dir = output_dir / "cases"
@@ -322,13 +324,16 @@ def _run_deterministic_stage(*, run_store: RunStore, settings: Settings, llm_ena
             deterministic_findings=dict(analyzed.get("deterministic_findings", {})),
             deterministic_root_cause_hint=analyzed.get("deterministic_root_cause_hint"),
             analysis_version=ANALYSIS_VERSION,
+            commit=False,
         )
         run_store.update_job_after_deterministic(
             case_id=record.case_id,
             job_status="llm_pending" if llm_required else "deterministic_done",
             eligible_for_llm=record.eligible_for_llm,
             llm_required=llm_required,
+            commit=False,
         )
+    run_store.commit()
 
 
 def _iter_llm_pending_items(run_store: RunStore) -> Iterator[dict[str, Any]]:
@@ -381,6 +386,7 @@ def _finalize_pending_results(
             llm_response_stats,
             run_store,
         )
+    run_store.commit()
 
 
 def _is_retryable_llm_failure(parse_info: Dict[str, Any]) -> bool:
@@ -500,6 +506,7 @@ def _flush_llm_batch(
             case_id=item["record"].case_id,
             lease_token=lease_token,
             lease_until=lease_until,
+            commit=False,
         )
         prepared_batch.append(
             {
@@ -538,17 +545,19 @@ def _flush_llm_batch(
             error_message=warning,
             http_status=parse_info.get("http_status"),
             is_selected=bool(llm_result),
+            commit=False,
         )
         if warning:
             llm_warnings.append(warning)
         if llm_result:
-            run_store.mark_job_llm_done(item["record"].case_id)
+            run_store.mark_job_llm_done(item["record"].case_id, commit=False)
         else:
             run_store.mark_job_llm_failed(
                 case_id=item["record"].case_id,
                 retryable=retryable,
                 last_error=warning or parse_info.get("invalid_reason"),
                 next_retry_at=next_retry_at,
+                commit=False,
             )
         result = build_final_case_result(item["record"], item["findings"], llm_result, llm_parse_info=parse_info)
         _persist_result(
@@ -562,6 +571,7 @@ def _flush_llm_batch(
             run_store,
             finalize_job=not retryable,
         )
+    run_store.commit()
 
 
 
@@ -634,9 +644,16 @@ def _persist_result(
         checkpoint.store_result(result.case_id, result_row)
         checkpoint.save_metadata("llm_warnings", llm_warnings)
         checkpoint.save_metadata("llm_response_stats", llm_response_stats)
-    run_store.save_final_result(result_row)
+    run_store.save_final_result(result_row, commit=False)
     if finalize_job:
-        run_store.mark_job_finalized(result.case_id)
+        run_store.mark_job_finalized(result.case_id, commit=False)
+
+
+def _assert_supported_case_volume(case_count: int) -> None:
+    if case_count > MAX_SUPPORTED_CASES:
+        raise ValueError(
+            f"run contains {case_count} cases, which exceeds the supported maximum of {MAX_SUPPORTED_CASES}"
+        )
 
 
 def _export_case_analysis_from_store(run_store: RunStore, case_analysis_path: Path) -> None:

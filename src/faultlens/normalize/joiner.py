@@ -199,8 +199,9 @@ def join_records_iter(
 
 def build_ingest_snapshot(store: RunStore, inference_path: Path, results_path: Path) -> None:
     for case in join_records_iter(inference_path, results_path, store=store):
-        store.record_joined_case(case)
-        store.ensure_analysis_job(case_id=str(case.get("case_id")), job_status="ingested")
+        store.record_joined_case(case, commit=False)
+        store.ensure_analysis_job(case_id=str(case.get("case_id")), job_status="ingested", commit=False)
+    store.commit()
 
 
 def build_ingest_snapshot_with_manifest(
@@ -265,10 +266,11 @@ def build_ingest_snapshot_with_manifest(
                         JsonlRecord(line_number=int(inf_line), data=json.loads(inf_payload)),
                         JsonlRecord(line_number=int(res_line), data=json.loads(res_payload)),
                     )
-                store.record_joined_case(case)
-                store.ensure_analysis_job(case_id=str(case.get("case_id")), job_status="ingested")
+                store.record_joined_case(case, commit=False)
+                store.ensure_analysis_job(case_id=str(case.get("case_id")), job_status="ingested", commit=False)
         finally:
             connection.close()
+    store.commit()
     return [snapshots[item["path"]] for item in sorted(input_metadata, key=lambda row: row["declared_order"])]
 
 
@@ -356,6 +358,7 @@ def _record_ingest_event(
         event_type=event_type,
         message=message,
         payload_excerpt=payload_excerpt,
+        commit=False,
     )
 
 

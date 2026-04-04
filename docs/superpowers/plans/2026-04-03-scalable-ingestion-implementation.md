@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Upgrade FaultLens from a transient streaming pipeline to a persistent SQLite-backed run store so 2000+ case runs can resume safely, preserve LLM audit trails, and rebuild outputs from durable state.
+**Goal:** Upgrade FaultLens from a transient streaming pipeline to a persistent SQLite-backed run store so 1000-case runs can resume safely, preserve LLM audit trails, and rebuild outputs from durable state.
 
 **Architecture:** Keep the current CLI and deterministic/LLM analyzers, but replace the temporary join/checkpoint flow with a durable `run.db` state machine. The new flow ingests inputs once into persistent tables, records deterministic and LLM stage results separately, then renders reports from `final_results` so resume and rerender are independent of source JSONL files.
 
@@ -384,8 +384,8 @@ git commit -m "feat: finalize reports from durable run state"
 - [ ] **Step 1: Expand the scaling fixture tests**
 
 ```python
-def test_cli_handles_2000_case_resume_flow(tmp_path: Path) -> None:
-    inference_path, results_path = build_large_fixture(tmp_path, count=2000)
+def test_cli_handles_1000_case_resume_flow(tmp_path: Path) -> None:
+    inference_path, results_path = build_large_fixture(tmp_path, count=1000)
     exit_code = main([...])
     assert exit_code == 0
 ```

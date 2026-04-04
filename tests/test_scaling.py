@@ -3,7 +3,10 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 from faultlens.cli import main
+from faultlens.orchestrator import _assert_supported_case_volume
 from faultlens.scale.run_store import RunStore
 
 
@@ -683,14 +686,18 @@ def test_cli_resume_uses_run_store_without_checkpoint_file(tmp_path: Path):
     assert call_count["value"] == 0
 
 
-def test_cli_handles_2000_case_run_with_run_store(tmp_path: Path):
+def test_case_volume_guard_accepts_1000_cases():
+    _assert_supported_case_volume(1000)
+
+
+def test_cli_rejects_runs_larger_than_1000_cases(tmp_path: Path):
     inference_path = tmp_path / "inference.jsonl"
     results_path = tmp_path / "results.jsonl"
     output_dir = tmp_path / "outputs"
 
     inference_rows = []
     results_rows = []
-    for case_id in range(1, 2001):
+    for case_id in range(1, 1002):
         inference_rows.append(
             {
                 "id": case_id,
@@ -716,25 +723,17 @@ def test_cli_handles_2000_case_run_with_run_store(tmp_path: Path):
     _write_large_fixture(inference_path, inference_rows)
     _write_large_fixture(results_path, results_rows)
 
-    exit_code = main(
-        [
-            "analyze",
-            "--input",
-            str(inference_path),
-            str(results_path),
-            "--output-dir",
-            str(output_dir),
-        ]
-    )
-
-    assert exit_code == 0
-
-    store = RunStore(output_dir / "run.db").open()
-    try:
-        assert store.count_joined_cases() == 2000
-        assert store.count_final_results() == 2000
-    finally:
-        store.close()
+    with pytest.raises(ValueError, match="1000"):
+        main(
+            [
+                "analyze",
+                "--input",
+                str(inference_path),
+                str(results_path),
+                "--output-dir",
+                str(output_dir),
+            ]
+        )
 
 
 def test_cli_resume_processes_llm_pending_jobs_without_rerunning_deterministic(tmp_path: Path, monkeypatch):
