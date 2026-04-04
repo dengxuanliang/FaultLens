@@ -6,6 +6,9 @@ __pycache__/
 ruff_cache/
 outputs/
 demo/
+demo_outputs/*
+!demo_outputs/demo_inference.jsonl
+!demo_outputs/demo_results.jsonl
 *.pyc
 *.pyo
 *.pyd
