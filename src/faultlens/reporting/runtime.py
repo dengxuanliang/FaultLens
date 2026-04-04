@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
+import sys
 from typing import Any, Dict, Iterator, Optional
 
+from faultlens import __version__
+from faultlens.deterministic.runners.base import sandbox_available
 from faultlens.llm.adaptive_parser import parse_attribution_response
 from faultlens.models import AttributionResult
 from faultlens.reporting.aggregate import SummaryAccumulator
@@ -33,17 +39,26 @@ def build_run_context(
     metadata = run_store.load_run_metadata()
     stored_settings = metadata.get("settings_json") or {}
     input_files = run_store.load_input_files()
-    input_warnings = [row["message"] for row in run_store.list_run_warnings()] + [
-        row["message"] for row in run_store.list_ingest_events()
-    ]
+    run_warnings = run_store.list_run_warnings()
+    ingest_events = run_store.list_ingest_events()
+    input_warnings = [row["message"] for row in run_warnings] + [row["message"] for row in ingest_events]
     job_status_counts = run_store.count_jobs_by_status()
     case_counts = {"passed": 0, "attributable_failure": 0, "data_issue": 0, "join_issue": 0}
     for row in run_store.iter_final_result_rows():
         status = str(row.get("case_status", "unknown"))
         case_counts[status] = case_counts.get(status, 0) + 1
+    capability_snapshot = _build_capability_snapshot(stored_settings)
+    failure_taxonomy = _build_failure_taxonomy(
+        case_counts=case_counts,
+        job_status_counts=job_status_counts,
+        run_warnings=run_warnings,
+        ingest_events=ingest_events,
+    )
     return {
         "input_files": [item["path"] for item in input_files],
         "role_detection": {item["path"]: item["detected_role"] for item in input_files},
+        "faultlens_version": metadata.get("faultlens_version"),
+        "git_commit": metadata.get("git_commit"),
         "join_stats": {
             "joined": summary.total_cases - case_counts.get("join_issue", 0),
             "join_issue": case_counts.get("join_issue", 0),
@@ -54,6 +69,8 @@ def build_run_context(
         "llm_warnings": llm_warnings,
         "llm_response_stats": llm_response_stats,
         "llm_max_workers": stored_settings.get("llm_max_workers"),
+        "capability_snapshot": capability_snapshot,
+        "failure_taxonomy": failure_taxonomy,
         "job_status_counts": job_status_counts,
         "pending_llm_backlog": sum(
             int(job_status_counts.get(status, 0))
@@ -143,6 +160,67 @@ def load_run_status(*, output_dir: Path, stats_factory) -> Dict[str, Any]:
         run_store.close()
 
 
+def inspect_output_dir(*, output_dir: Path) -> Dict[str, Any]:
+    output_dir = Path(output_dir)
+    required_files = [
+        "run.db",
+        "analysis_report.md",
+        "summary.json",
+        "run_metadata.json",
+        "case_analysis.jsonl",
+        "hierarchical_root_cause_report.md",
+    ]
+    missing_artifacts = [name for name in required_files if not (output_dir / name).exists()]
+    consistency_checks = _build_output_consistency_checks(output_dir)
+    consistency_healthy = all(check.get("healthy", False) for check in consistency_checks.values())
+    health = {
+        "output_dir": str(output_dir),
+        "healthy": not missing_artifacts and consistency_healthy,
+        "missing_artifacts": missing_artifacts,
+        "consistency_checks": consistency_checks,
+        "faultlens_version": __version__,
+        "git_commit": _detect_git_commit(output_dir),
+    }
+    if (output_dir / "run.db").exists():
+        run_store = RunStore(output_dir / "run.db").open()
+        try:
+            metadata = run_store.load_run_metadata()
+            health["run_metadata_present"] = True
+            health["run_id"] = metadata.get("run_id")
+            health["analysis_version"] = metadata.get("analysis_version")
+            health["prompt_version"] = metadata.get("prompt_version")
+        finally:
+            run_store.close()
+    else:
+        health["run_metadata_present"] = False
+    return health
+
+
+def diagnose_environment(*, output_dir: Path) -> Dict[str, Any]:
+    output_dir = Path(output_dir)
+    return {
+        "output_dir": str(output_dir),
+        "python": {
+            "executable": sys.executable,
+            "version": sys.version.split()[0],
+        },
+        "sandbox": {
+            "available": sandbox_available(),
+            "implementation": shutil.which("sandbox-exec"),
+        },
+        "runners": _build_capability_snapshot({}).get("runners", {}),
+        "llm_env": {
+            "api_key_present": bool(os.environ.get("FAULTLENS_API_KEY")),
+            "base_url_present": bool(os.environ.get("FAULTLENS_BASE_URL")),
+            "model_present": bool(os.environ.get("FAULTLENS_MODEL")),
+        },
+        "artifacts": {
+            "output_dir_exists": output_dir.exists(),
+            "run_db_exists": (output_dir / "run.db").exists(),
+        },
+    }
+
+
 def iter_results(case_analysis_path: Path) -> Iterator[AttributionResult]:
     with Path(case_analysis_path).open("r", encoding="utf-8") as handle:
         for raw in handle:
@@ -193,3 +271,209 @@ def _update_stats(stats: Dict[str, Any], case_id: str, *, status: str | None, re
 
 def _increment_reason(counter: Dict[str, int], reason: str) -> None:
     counter[reason] = counter.get(reason, 0) + 1
+
+
+def _build_output_consistency_checks(output_dir: Path) -> Dict[str, Any]:
+    checks = {
+        "case_analysis": {"healthy": False, "row_count": 0, "case_ids": []},
+        "case_markdown": {"healthy": False, "missing_case_ids": [], "unexpected_case_ids": []},
+        "summary": {"healthy": False},
+        "run_metadata": {"healthy": False},
+        "exemplars": {"healthy": False, "missing_files": [], "unexpected_files": []},
+        "llm_raw_responses": {"healthy": False, "missing_paths": [], "unexpected_paths": []},
+        "manifests": {"healthy": False, "missing": []},
+    }
+
+    case_analysis_path = output_dir / "case_analysis.jsonl"
+    if not case_analysis_path.exists():
+        return checks
+
+    rows = []
+    with case_analysis_path.open("r", encoding="utf-8") as handle:
+        for raw in handle:
+            if not raw.strip():
+                continue
+            rows.append(json.loads(raw))
+    case_ids = sorted(str(row.get("case_id")) for row in rows)
+    checks["case_analysis"] = {
+        "healthy": True,
+        "row_count": len(rows),
+        "case_ids": case_ids,
+    }
+
+    case_dir = output_dir / "cases"
+    rendered_case_ids = sorted(path.stem for path in case_dir.glob("*.md")) if case_dir.exists() else []
+    missing_case_ids = sorted(case_id for case_id in case_ids if case_id not in rendered_case_ids)
+    unexpected_case_ids = sorted(case_id for case_id in rendered_case_ids if case_id not in case_ids)
+    checks["case_markdown"] = {
+        "healthy": not missing_case_ids and not unexpected_case_ids,
+        "expected_count": len(case_ids),
+        "rendered_count": len(rendered_case_ids),
+        "missing_case_ids": missing_case_ids,
+        "unexpected_case_ids": unexpected_case_ids,
+    }
+
+    summary_path = output_dir / "summary.json"
+    if summary_path.exists():
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        derived_total_cases = len(rows)
+        reported_total_cases = int(summary.get("total_cases", -1))
+        checks["summary"] = {
+            "healthy": reported_total_cases == derived_total_cases,
+            "reported_total_cases": reported_total_cases,
+            "derived_total_cases": derived_total_cases,
+        }
+        expected_exemplars = sorted(
+            f"{root_cause.replace('/', '-')}-{case_id}.md"
+            for root_cause, case_ids in (summary.get("exemplars") or {}).items()
+            for case_id in case_ids[:1]
+        )
+        rendered_exemplars = sorted(path.name for path in (output_dir / "exemplars").glob("*.md")) if (output_dir / "exemplars").exists() else []
+        missing_exemplars = sorted(name for name in expected_exemplars if name not in rendered_exemplars)
+        unexpected_exemplars = sorted(name for name in rendered_exemplars if name not in expected_exemplars)
+        checks["exemplars"] = {
+            "healthy": not missing_exemplars and not unexpected_exemplars,
+            "expected_count": len(expected_exemplars),
+            "rendered_count": len(rendered_exemplars),
+            "missing_files": missing_exemplars,
+            "unexpected_files": unexpected_exemplars,
+        }
+
+    expected_raw_paths = sorted(
+        str(row.get("llm_raw_response_path"))
+        for row in rows
+        if row.get("llm_raw_response_path")
+    )
+    rendered_raw_paths = sorted(
+        str(path.relative_to(output_dir))
+        for path in (output_dir / "llm_raw_responses").glob("*")
+        if path.is_file()
+    ) if (output_dir / "llm_raw_responses").exists() else []
+    missing_raw_paths = sorted(path for path in expected_raw_paths if path not in rendered_raw_paths)
+    unexpected_raw_paths = sorted(path for path in rendered_raw_paths if path not in expected_raw_paths)
+    checks["llm_raw_responses"] = {
+        "healthy": not missing_raw_paths and not unexpected_raw_paths,
+        "expected_count": len(expected_raw_paths),
+        "rendered_count": len(rendered_raw_paths),
+        "missing_paths": missing_raw_paths,
+        "unexpected_paths": unexpected_raw_paths,
+    }
+
+    run_metadata_path = output_dir / "run_metadata.json"
+    if run_metadata_path.exists():
+        run_metadata = json.loads(run_metadata_path.read_text(encoding="utf-8"))
+        derived_case_counts: Dict[str, int] = {}
+        for row in rows:
+            status = str(row.get("case_status", "unknown"))
+            derived_case_counts[status] = derived_case_counts.get(status, 0) + 1
+        reported_case_counts = dict(run_metadata.get("case_counts") or {})
+        normalized_keys = sorted(set(reported_case_counts) | set(derived_case_counts))
+        normalized_reported_case_counts = {
+            key: int(reported_case_counts.get(key, 0))
+            for key in normalized_keys
+        }
+        normalized_derived_case_counts = {
+            key: int(derived_case_counts.get(key, 0))
+            for key in normalized_keys
+        }
+        checks["run_metadata"] = {
+            "healthy": normalized_reported_case_counts == normalized_derived_case_counts,
+            "reported_case_counts": normalized_reported_case_counts,
+            "derived_case_counts": normalized_derived_case_counts,
+        }
+
+    manifest_missing = [
+        name
+        for name in ("input_manifest.json", "analysis_manifest.json")
+        if not (output_dir / name).exists()
+    ]
+    checks["manifests"] = {
+        "healthy": not manifest_missing,
+        "missing": manifest_missing,
+    }
+    return checks
+
+
+def _build_capability_snapshot(settings: Dict[str, Any]) -> Dict[str, Any]:
+    sandbox = sandbox_available()
+    llm_configured = bool(settings.get("llm_enabled"))
+    return {
+        "sandbox": {"available": sandbox},
+        "llm": {
+            "configured": llm_configured,
+            "mode": "enabled" if llm_configured else "deterministic_only",
+            "model": settings.get("model"),
+        },
+        "runners": {
+            "python": {
+                "available": sandbox,
+                "runtime_execution": sandbox,
+                "toolchain": sys.executable,
+            },
+            "cpp": {
+                "available": sandbox and bool(shutil.which("g++") or shutil.which("clang++")),
+                "runtime_execution": sandbox,
+                "toolchain": shutil.which("g++") or shutil.which("clang++"),
+            },
+            "java": {
+                "available": sandbox and bool(shutil.which("javac")) and bool(shutil.which("java")),
+                "runtime_execution": sandbox,
+                "toolchain": {"javac": shutil.which("javac"), "java": shutil.which("java")},
+            },
+            "go": {
+                "available": sandbox and bool(shutil.which("go")),
+                "runtime_execution": sandbox,
+                "toolchain": shutil.which("go"),
+            },
+        },
+    }
+
+
+def _build_failure_taxonomy(
+    *,
+    case_counts: Dict[str, int],
+    job_status_counts: Dict[str, int],
+    run_warnings: list[dict[str, Any]],
+    ingest_events: list[dict[str, Any]],
+) -> Dict[str, Any]:
+    warning_counts: Dict[str, int] = {}
+    for row in run_warnings:
+        stage = str(row.get("stage") or "unknown")
+        warning_counts[stage] = warning_counts.get(stage, 0) + 1
+    return {
+        "case_status_counts": case_counts,
+        "llm": {
+            "pending": int(job_status_counts.get("llm_pending", 0)),
+            "running": int(job_status_counts.get("llm_running", 0)),
+            "retryable": int(job_status_counts.get("llm_failed_retryable", 0)),
+            "terminal": int(job_status_counts.get("llm_failed_terminal", 0)),
+        },
+        "warnings": {
+            **warning_counts,
+            "ingest": len(ingest_events),
+        },
+    }
+
+
+def build_provenance() -> Dict[str, Any]:
+    return {
+        "faultlens_version": __version__,
+        "git_commit": _detect_git_commit(Path(__file__).resolve().parents[3]),
+    }
+
+
+def _detect_git_commit(base_path: Path) -> str | None:
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(base_path), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+    if completed.returncode != 0:
+        return None
+    value = (completed.stdout or "").strip()
+    return value or None

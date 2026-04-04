@@ -2,6 +2,7 @@ import os
 
 from faultlens.config import load_settings
 from faultlens.env import load_dotenv
+import pytest
 
 
 def test_load_dotenv_reads_project_env(tmp_path):
@@ -77,3 +78,22 @@ def test_tests_do_not_inherit_real_llm_credentials_from_shell(tmp_path, monkeypa
     assert settings.api_key is None
     assert settings.base_url is None
     assert settings.model is None
+
+
+def test_load_settings_rejects_invalid_integer_values(tmp_path):
+    env_path = tmp_path / ".env"
+    env_path.write_text("FAULTLENS_LLM_MAX_WORKERS=not-a-number\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="FAULTLENS_LLM_MAX_WORKERS"):
+        load_settings(env_path=env_path)
+
+
+def test_load_settings_rejects_partial_llm_configuration(tmp_path):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "FAULTLENS_API_KEY=test-key\nFAULTLENS_BASE_URL=https://example.invalid/v1\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="FAULTLENS_MODEL"):
+        load_settings(env_path=env_path)

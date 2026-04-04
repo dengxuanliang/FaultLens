@@ -477,7 +477,6 @@ def test_run_metadata_and_report_include_job_status_distribution(tmp_path: Path,
         "http://invalid.local",
         "--model",
         "m",
-        "--resume",
     ])
 
     assert exit_code == 0
@@ -490,6 +489,52 @@ def test_run_metadata_and_report_include_job_status_distribution(tmp_path: Path,
     assert "# 任务状态" in report_text
     assert "llm_failed_retryable" in report_text
     assert "待处理 LLM backlog：" in report_text
+
+
+def test_run_metadata_includes_capability_snapshot_and_failure_taxonomy(tmp_path: Path, fixtures_dir: Path):
+    output_dir = tmp_path / "outputs"
+
+    exit_code = main(
+        [
+            "analyze",
+            "--input",
+            str(fixtures_dir / "inference_sample.jsonl"),
+            str(fixtures_dir / "results_sample.jsonl"),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+
+    run_metadata = json.loads((output_dir / "run_metadata.json").read_text(encoding="utf-8"))
+    assert "capability_snapshot" in run_metadata
+    assert "failure_taxonomy" in run_metadata
+    assert run_metadata["capability_snapshot"]["llm"]["configured"] is False
+    assert "python" in run_metadata["capability_snapshot"]["runners"]
+    assert run_metadata["failure_taxonomy"]["case_status_counts"]["attributable_failure"] >= 1
+    assert "retryable" in run_metadata["failure_taxonomy"]["llm"]
+
+
+def test_run_metadata_includes_provenance_fields(tmp_path: Path, fixtures_dir: Path):
+    output_dir = tmp_path / "outputs"
+
+    exit_code = main(
+        [
+            "analyze",
+            "--input",
+            str(fixtures_dir / "inference_sample.jsonl"),
+            str(fixtures_dir / "results_sample.jsonl"),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+
+    run_metadata = json.loads((output_dir / "run_metadata.json").read_text(encoding="utf-8"))
+    assert run_metadata["faultlens_version"] == "0.1.0"
+    assert "git_commit" in run_metadata
 
 
 def test_case_output_persists_request_error_response_body(tmp_path: Path, fixtures_dir: Path, monkeypatch):

@@ -183,6 +183,15 @@ def test_render_analysis_report_surfaces_llm_job_backlog():
             "case_counts": {"attributable_failure": 1},
             "model_summary": "gpt-test",
             "llm_max_workers": 4,
+            "capability_snapshot": {
+                "llm": {"configured": True, "mode": "enabled"},
+                "runners": {"python": {"available": True}, "java": {"available": False}},
+            },
+            "failure_taxonomy": {
+                "case_status_counts": {"attributable_failure": 1},
+                "llm": {"retryable": 4, "terminal": 0},
+                "warnings": {"preflight": 0, "ingest": 0},
+            },
             "job_status_counts": {
                 "finalized": 1,
                 "llm_pending": 3,
@@ -194,6 +203,8 @@ def test_render_analysis_report_surfaces_llm_job_backlog():
     )
 
     assert "# 任务状态" in report
+    assert "# 能力快照" in report
+    assert "# 失败分类" in report
     assert "llm_pending" in report
     assert "llm_running" in report
     assert "llm_failed_retryable" in report

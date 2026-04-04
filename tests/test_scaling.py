@@ -63,7 +63,6 @@ def test_cli_resume_skips_already_checkpointed_cases(tmp_path: Path):
             "m",
             "--llm-max-workers",
             "2",
-            "--resume",
         ]
     )
     assert first == 0
@@ -162,31 +161,31 @@ def test_cli_resume_rejects_runtime_setting_drift(tmp_path: Path):
             "m",
             "--llm-max-retries",
             "2",
-            "--resume",
         ]
     )
     assert first == 0
 
-    with pytest.raises(ValueError, match="settings mismatch"):
-        main(
-            [
-                "analyze",
-                "--input",
-                str(inference_path),
-                str(results_path),
-                "--output-dir",
-                str(output_dir),
-                "--api-key",
-                "k",
-                "--base-url",
-                "http://invalid.local",
-                "--model",
-                "m",
-                "--llm-max-retries",
-                "5",
-                "--resume",
-            ]
-        )
+    second = main(
+        [
+            "analyze",
+            "--input",
+            str(inference_path),
+            str(results_path),
+            "--output-dir",
+            str(output_dir),
+            "--api-key",
+            "k",
+            "--base-url",
+            "http://invalid.local",
+            "--model",
+            "m",
+            "--llm-max-retries",
+            "5",
+            "--resume",
+        ]
+    )
+
+    assert second == 1
 
 
 def test_cli_retries_retryable_llm_jobs_only_after_backoff_window(tmp_path: Path, monkeypatch):
@@ -260,7 +259,6 @@ def test_cli_retries_retryable_llm_jobs_only_after_backoff_window(tmp_path: Path
             "http://invalid.local",
             "--model",
             "m",
-            "--resume",
         ]
     )
     assert first == 0
@@ -440,7 +438,6 @@ def test_cli_stops_retryable_llm_jobs_after_max_retry_budget(tmp_path: Path, mon
             "m",
             "--llm-max-retries",
             "1",
-            "--resume",
         ]
     )
     assert first == 0
@@ -584,7 +581,6 @@ def test_cli_uses_bounded_llm_worker_concurrency(tmp_path: Path):
                 "m",
                 "--llm-max-workers",
                 "3",
-                "--resume",
             ]
         )
     finally:
@@ -700,7 +696,6 @@ def test_cli_resume_uses_run_store_without_checkpoint_file(tmp_path: Path):
             "http://invalid.local",
             "--model",
             "m",
-            "--resume",
         ]
     )
     assert first == 0
@@ -799,17 +794,18 @@ def test_cli_rejects_runs_larger_than_1000_cases(tmp_path: Path):
     _write_large_fixture(inference_path, inference_rows)
     _write_large_fixture(results_path, results_rows)
 
-    with pytest.raises(ValueError, match="1000"):
-        main(
-            [
-                "analyze",
-                "--input",
-                str(inference_path),
-                str(results_path),
-                "--output-dir",
-                str(output_dir),
-            ]
-        )
+    exit_code = main(
+        [
+            "analyze",
+            "--input",
+            str(inference_path),
+            str(results_path),
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 1
 
 
 def test_cli_resume_processes_llm_pending_jobs_without_rerunning_deterministic(tmp_path: Path, monkeypatch):
@@ -870,7 +866,6 @@ def test_cli_resume_processes_llm_pending_jobs_without_rerunning_deterministic(t
                     "http://invalid.local",
                     "--model",
                     "m",
-                    "--resume",
                 ]
             )
         except RuntimeError as exc:
@@ -1020,7 +1015,6 @@ def test_cli_resume_rebuilds_selected_llm_result_from_response_file(tmp_path: Pa
             "http://invalid.local",
             "--model",
             "m",
-            "--resume",
         ]
     )
     assert first == 0

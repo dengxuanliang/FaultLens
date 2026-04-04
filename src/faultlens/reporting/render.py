@@ -25,6 +25,8 @@ def render_analysis_report(summary: SummaryReport, results: list[AttributionResu
         f"- 失败样本数：{failed_cases}\n"
         f"- 可归因失败数：{attributable_failures}",
         "# 任务状态\n" + _format_job_status_section(run_context),
+        "# 能力快照\n" + _format_capability_snapshot(run_context.get("capability_snapshot")),
+        "# 失败分类\n" + _format_failure_taxonomy(run_context.get("failure_taxonomy")),
         "# 确定性分析摘要\n" + _format_signal_mapping(summary.deterministic_signal_counts, total=failed_cases),
         "# LLM 根因分布\n" + _format_root_cause_mapping(summary.root_cause_counts, total=attributable_failures),
         "# 三层错因聚合\n" + _format_hierarchy_summary(summary, total=attributable_failures),
@@ -248,6 +250,35 @@ def _format_job_status_section(run_context: dict) -> str:
         f"- 待处理 LLM backlog：{run_context.get('pending_llm_backlog', 0)}",
     ]
     return "\n".join(lines)
+
+
+def _format_capability_snapshot(snapshot: dict | None) -> str:
+    if not snapshot:
+        return "- 无"
+    runners = snapshot.get("runners") or {}
+    runner_lines = [
+        f"- {language}: available={details.get('available', False)}, runtime_execution={details.get('runtime_execution', False)}, toolchain={details.get('toolchain') or '无'}"
+        for language, details in runners.items()
+    ]
+    return "\n".join(
+        [
+            f"- sandbox: {snapshot.get('sandbox', {}).get('available', False)}",
+            f"- llm: {snapshot.get('llm', {})}",
+            *runner_lines,
+        ]
+    )
+
+
+def _format_failure_taxonomy(taxonomy: dict | None) -> str:
+    if not taxonomy:
+        return "- 无"
+    return "\n".join(
+        [
+            f"- case_status_counts: {taxonomy.get('case_status_counts') or {}}",
+            f"- llm: {taxonomy.get('llm') or {}}",
+            f"- warnings: {taxonomy.get('warnings') or {}}",
+        ]
+    )
 
 
 def _format_hierarchical_case_section(hierarchy: dict) -> str:

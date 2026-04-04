@@ -24,7 +24,10 @@ from faultlens.normalize.joiner import build_ingest_snapshot, build_ingest_snaps
 from faultlens.reporting.aggregate import SummaryAccumulator
 from faultlens.reporting.runtime import (
     build_run_context,
+    build_provenance,
+    diagnose_environment,
     export_case_report,
+    inspect_output_dir,
     iter_results,
     load_run_status as _load_run_status,
     load_selected_llm_result,
@@ -54,12 +57,17 @@ def run_analysis(
     case_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     input_paths = [Path(path) for path in input_paths]
+    _validate_run_preflight(input_paths=input_paths, settings=settings, output_dir=output_dir)
+    llm_enabled = bool(settings.api_key and settings.base_url and settings.model)
     resolved = detect_input_roles(input_paths)
     input_metadata = _build_input_metadata(input_paths, resolved.detected_roles)
 
     _prepare_output_dir(output_dir, resume=settings.resume)
     run_store = RunStore(output_dir / "run.db").open()
     resume_run = settings.resume and run_store.has_run_metadata()
+    if settings.resume and not resume_run:
+        run_store.close()
+        raise ValueError("resume requested but no existing run metadata was found in the output directory")
     if resume_run:
         input_snapshots = _build_input_snapshots(input_paths, resolved.detected_roles)
         run_store.assert_resume_safe(
@@ -68,6 +76,7 @@ def run_analysis(
             prompt_version=PROMPT_VERSION,
             settings={
                 "model": settings.model,
+                "llm_enabled": llm_enabled,
                 "llm_max_workers": settings.llm_max_workers,
                 "llm_max_retries": settings.llm_max_retries,
                 "llm_retry_backoff_seconds": settings.llm_retry_backoff_seconds,
@@ -81,17 +90,21 @@ def run_analysis(
         )
         run_store.requeue_retryable_jobs(now=_utcnow_iso())
     else:
+        provenance = build_provenance()
         run_store.initialize_run_metadata(
             analysis_version=ANALYSIS_VERSION,
             prompt_version=PROMPT_VERSION,
             settings={
                 "model": settings.model,
+                "llm_enabled": llm_enabled,
                 "llm_max_workers": settings.llm_max_workers,
                 "llm_max_retries": settings.llm_max_retries,
                 "llm_retry_backoff_seconds": settings.llm_retry_backoff_seconds,
                 "llm_retry_on_5xx": settings.llm_retry_on_5xx,
                 "resume": settings.resume,
             },
+            faultlens_version=provenance["faultlens_version"],
+            git_commit=provenance["git_commit"],
         )
         (output_dir / "analysis_manifest.json").write_text(
             json.dumps(
@@ -146,7 +159,6 @@ def run_analysis(
             for row in run_store.iter_final_result_rows():
                 result_handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
-        llm_enabled = bool(settings.api_key and settings.base_url and settings.model)
         _run_deterministic_stage(
             run_store=run_store,
             settings=settings,
@@ -314,6 +326,17 @@ def _prepare_output_dir(output_dir: Path, *, resume: bool) -> None:
     raw_responses_dir = output_dir / "llm_raw_responses"
     if raw_responses_dir.exists():
         shutil.rmtree(raw_responses_dir)
+
+
+def _validate_run_preflight(*, input_paths: list[Path], settings: Settings, output_dir: Path) -> None:
+    missing_inputs = [str(path) for path in input_paths if not path.exists()]
+    if missing_inputs:
+        raise FileNotFoundError(f"input file not found: {missing_inputs[0]}")
+    if settings.resume:
+        return
+    existing_run_db = output_dir / "run.db"
+    if existing_run_db.exists():
+        raise ValueError("output directory already contains run.db; use --resume or choose a fresh output directory")
 
 
 def _run_deterministic_stage(*, run_store: RunStore, settings: Settings, llm_enabled: bool) -> None:
@@ -703,6 +726,14 @@ def _max_llm_attempts(settings: Settings) -> int:
 
 def load_run_status(*, output_dir: Path) -> Dict[str, Any]:
     return _load_run_status(output_dir=output_dir, stats_factory=_initial_llm_response_stats)
+
+
+def inspect_output(*, output_dir: Path) -> Dict[str, Any]:
+    return inspect_output_dir(output_dir=output_dir)
+
+
+def diagnose_env(*, output_dir: Path) -> Dict[str, Any]:
+    return diagnose_environment(output_dir=output_dir)
 
 
 

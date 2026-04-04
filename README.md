@@ -32,15 +32,15 @@ FaultLens provides the following core capabilities:
 
 ## Acceptance status
 
-As of the current `main` branch, the core acceptance scope is implemented:
+As of the current `main` branch, the core v1 scope is implemented and validated in tests:
 
-- wrong-answer cause analysis: complete
-- deterministic + LLM attribution pipeline: complete
-- three-layer capability weakness aggregation: complete
-- durable resume after interruption: complete
-- rerender reports from persisted state: complete
-- 1000-case scale handling in tests: complete
-- retryable LLM failure capture with retry ceiling and backlog visibility: complete
+- wrong-answer cause analysis: implemented
+- deterministic + LLM attribution pipeline: implemented
+- three-layer capability weakness aggregation: implemented
+- durable resume after interruption: implemented
+- rerender reports from persisted state: implemented
+- 1000-case scale handling in tests: implemented
+- retryable LLM failure capture with retry ceiling and backlog visibility: implemented
 
 ## Inputs
 
@@ -153,7 +153,40 @@ PYTHONPATH=src python3 -m faultlens.cli status \
   --output-dir ./outputs
 ```
 
-This prints the current run context as JSON, including case counts, job-status counts, pending LLM backlog, warning summaries, and stored model configuration.
+This prints the current run context as JSON, including case counts, job-status counts, pending LLM backlog, warning summaries, stored model configuration, capability snapshot, and failure taxonomy.
+
+### Inspect output directory integrity
+
+To quickly validate whether an existing output directory still has the expected top-level artifacts:
+
+```bash
+PYTHONPATH=src python3 -m faultlens.cli inspect-output \
+  --output-dir ./outputs
+```
+
+This prints a small JSON health report and exits non-zero if required artifacts are missing.
+
+`inspect-output` now also performs read-only consistency checks across:
+- `case_analysis.jsonl` row count and case ids
+- `cases/*.md` full per-case markdown coverage
+- `exemplars/*.md` coverage for summary-selected exemplar cases
+- `llm_raw_responses/*` coverage for persisted per-case raw-response references
+- `summary.json` total case count
+- `run_metadata.json` case-count consistency
+- `input_manifest.json` and `analysis_manifest.json` presence
+
+If any of these drift, the command reports the exact mismatch and exits non-zero.
+
+### Diagnose local environment
+
+To quickly inspect whether the current host can run the expected deterministic pipeline:
+
+```bash
+PYTHONPATH=src python3 -m faultlens.cli diagnose-env \
+  --output-dir ./outputs
+```
+
+This prints a read-only JSON snapshot with Python version, sandbox availability, runner/toolchain visibility, LLM env presence, and whether the target output directory already contains `run.db`.
 
 ### Export one case markdown on demand
 
@@ -187,6 +220,7 @@ A normal analysis run writes:
 Structured outputs include:
 - `case_analysis.jsonl`: per-case attribution, parse mode, parse reason, raw-response path, raw-response sha256
 - `run_metadata.json`: join stats, model summary, LLM warning log, response-quality stats, `analysis_jobs` status distribution, pending LLM backlog
+- `run_metadata.json` also carries provenance fields such as `faultlens_version` and `git_commit` when available
 
 If an LLM request fails with a provider response body, FaultLens persists that raw body into `llm_raw_responses/` for later manual audit.
 
@@ -248,7 +282,7 @@ Current machine-dependent behavior:
 
 ## Known boundaries
 
-FaultLens is productized around durable local batch analysis, but the following boundaries still matter:
+FaultLens is aimed at durable local batch analysis, but the following boundaries still matter:
 
 - runtime execution quality depends on host toolchains and sandbox availability
 - LLM attribution quality still depends on upstream model behavior and endpoint stability
@@ -257,10 +291,10 @@ FaultLens is productized around durable local batch analysis, but the following 
 
 ## Verification
 
-The current repository state has full test verification on `main`:
+The current repository state has fresh full-test verification on `main`:
 
 - `pytest -q`
-- latest verified result: `100 passed`
+- latest verified result: `129 passed`
 
 ## Tests
 

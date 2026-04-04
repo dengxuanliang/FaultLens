@@ -1,5 +1,6 @@
 from faultlens.cli import main
-from faultlens.scale.run_store import RunStore
+import json
+from pathlib import Path
 
 
 def test_cli_requires_two_input_files(capsys):
@@ -44,7 +45,6 @@ def test_cli_accepts_scaling_flags(tmp_path, fixtures_dir, monkeypatch):
         "--llm-retry-backoff-seconds",
         "3",
         "--no-llm-retry-on-5xx",
-        "--resume",
     ])
 
     assert exit_code == 0
@@ -108,6 +108,277 @@ def test_cli_supports_status_subcommand(tmp_path, fixtures_dir):
     assert status_exit == 0
 
 
+def test_cli_supports_inspect_output_subcommand(tmp_path, fixtures_dir, capsys):
+    output_dir = tmp_path / "outs"
+
+    analyze_exit = main([
+        "analyze",
+        "--input",
+        str(fixtures_dir / "inference_sample.jsonl"),
+        str(fixtures_dir / "results_sample.jsonl"),
+        "--output-dir",
+        str(output_dir),
+    ])
+    assert analyze_exit == 0
+
+    inspect_exit = main([
+        "inspect-output",
+        "--output-dir",
+        str(output_dir),
+    ])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert inspect_exit == 0
+    assert payload["healthy"] is True
+    assert payload["missing_artifacts"] == []
+
+
+def test_cli_inspect_output_detects_missing_artifacts(tmp_path, fixtures_dir, capsys):
+    output_dir = tmp_path / "outs"
+
+    analyze_exit = main([
+        "analyze",
+        "--input",
+        str(fixtures_dir / "inference_sample.jsonl"),
+        str(fixtures_dir / "results_sample.jsonl"),
+        "--output-dir",
+        str(output_dir),
+    ])
+    assert analyze_exit == 0
+
+    (output_dir / "summary.json").unlink()
+
+    inspect_exit = main([
+        "inspect-output",
+        "--output-dir",
+        str(output_dir),
+    ])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert inspect_exit == 1
+    assert "summary.json" in payload["missing_artifacts"]
+
+
+def test_cli_inspect_output_detects_case_markdown_mismatch(tmp_path, fixtures_dir, capsys):
+    output_dir = tmp_path / "outs"
+
+    analyze_exit = main([
+        "analyze",
+        "--input",
+        str(fixtures_dir / "inference_sample.jsonl"),
+        str(fixtures_dir / "results_sample.jsonl"),
+        "--output-dir",
+        str(output_dir),
+    ])
+    assert analyze_exit == 0
+
+    (output_dir / "cases" / "2.md").unlink()
+
+    inspect_exit = main([
+        "inspect-output",
+        "--output-dir",
+        str(output_dir),
+    ])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert inspect_exit == 1
+    assert payload["healthy"] is False
+    assert payload["consistency_checks"]["case_markdown"]["healthy"] is False
+    assert "2" in payload["consistency_checks"]["case_markdown"]["missing_case_ids"]
+
+
+def test_cli_inspect_output_detects_summary_count_mismatch(tmp_path, fixtures_dir, capsys):
+    output_dir = tmp_path / "outs"
+
+    analyze_exit = main([
+        "analyze",
+        "--input",
+        str(fixtures_dir / "inference_sample.jsonl"),
+        str(fixtures_dir / "results_sample.jsonl"),
+        "--output-dir",
+        str(output_dir),
+    ])
+    assert analyze_exit == 0
+
+    summary_path = output_dir / "summary.json"
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    summary["total_cases"] = 999
+    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    inspect_exit = main([
+        "inspect-output",
+        "--output-dir",
+        str(output_dir),
+    ])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert inspect_exit == 1
+    assert payload["consistency_checks"]["summary"]["healthy"] is False
+    assert payload["consistency_checks"]["summary"]["reported_total_cases"] == 999
+    assert payload["consistency_checks"]["summary"]["derived_total_cases"] == 2
+
+
+def test_cli_inspect_output_detects_run_metadata_case_count_mismatch(tmp_path, fixtures_dir, capsys):
+    output_dir = tmp_path / "outs"
+
+    analyze_exit = main([
+        "analyze",
+        "--input",
+        str(fixtures_dir / "inference_sample.jsonl"),
+        str(fixtures_dir / "results_sample.jsonl"),
+        "--output-dir",
+        str(output_dir),
+    ])
+    assert analyze_exit == 0
+
+    metadata_path = output_dir / "run_metadata.json"
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["case_counts"]["passed"] = 999
+    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    inspect_exit = main([
+        "inspect-output",
+        "--output-dir",
+        str(output_dir),
+    ])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert inspect_exit == 1
+    assert payload["consistency_checks"]["run_metadata"]["healthy"] is False
+    assert payload["consistency_checks"]["run_metadata"]["reported_case_counts"]["passed"] == 999
+
+
+def test_cli_inspect_output_detects_missing_exemplar_file(tmp_path, fixtures_dir, capsys):
+    output_dir = tmp_path / "outs"
+
+    analyze_exit = main([
+        "analyze",
+        "--input",
+        str(fixtures_dir / "inference_sample.jsonl"),
+        str(fixtures_dir / "results_sample.jsonl"),
+        "--output-dir",
+        str(output_dir),
+        "--case-id",
+        "2",
+    ])
+    assert analyze_exit == 0
+
+    exemplar = next((output_dir / "exemplars").glob("*.md"))
+    exemplar.unlink()
+
+    inspect_exit = main([
+        "inspect-output",
+        "--output-dir",
+        str(output_dir),
+    ])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert inspect_exit == 1
+    assert payload["consistency_checks"]["exemplars"]["healthy"] is False
+    assert payload["consistency_checks"]["exemplars"]["rendered_count"] == 0
+
+
+def test_cli_inspect_output_detects_missing_llm_raw_response_artifact(tmp_path, fixtures_dir, capsys, monkeypatch):
+    output_dir = tmp_path / "outs"
+    raw_response = '{"root_cause":"solution_incorrect","explanation":"logic mismatch"}'
+
+    class FakeClient:
+        def __init__(self, settings):
+            self.enabled = True
+            self.last_warning = None
+            self.last_completion_info = {
+                "status": "strict_json",
+                "invalid_reason": None,
+                "raw_response_excerpt": '{"root_cause":"solution_incorrect"}',
+                "raw_response_text": raw_response,
+                "raw_response_sha256": "abc123",
+            }
+
+        def complete_json(self, messages):
+            return {
+                "root_cause": "solution_incorrect",
+                "explanation": "logic mismatch",
+                "observable_evidence": ["assert failed"],
+                "improvement_hints": ["compare against reference"],
+                "llm_signals": ["json"],
+                "evidence_refs": [{"source": "tests"}],
+            }
+
+    monkeypatch.setattr("faultlens.orchestrator.LLMClient", FakeClient)
+
+    analyze_exit = main([
+        "analyze",
+        "--input",
+        str(fixtures_dir / "inference_sample.jsonl"),
+        str(fixtures_dir / "results_sample.jsonl"),
+        "--output-dir",
+        str(output_dir),
+        "--api-key",
+        "k",
+        "--base-url",
+        "http://invalid.local",
+        "--model",
+        "m",
+    ])
+    assert analyze_exit == 0
+
+    (output_dir / "llm_raw_responses" / "2.txt").unlink()
+
+    inspect_exit = main([
+        "inspect-output",
+        "--output-dir",
+        str(output_dir),
+    ])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert inspect_exit == 1
+    assert payload["consistency_checks"]["llm_raw_responses"]["healthy"] is False
+    assert payload["consistency_checks"]["llm_raw_responses"]["missing_paths"] == ["llm_raw_responses/2.txt"]
+
+
+def test_cli_rejects_resume_when_output_dir_has_no_existing_run(tmp_path, fixtures_dir, capsys):
+    output_dir = tmp_path / "missing-run"
+
+    exit_code = main([
+        "analyze",
+        "--input",
+        str(fixtures_dir / "inference_sample.jsonl"),
+        str(fixtures_dir / "results_sample.jsonl"),
+        "--output-dir",
+        str(output_dir),
+        "--resume",
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "resume requested" in captured.err
+
+
+def test_cli_prints_user_friendly_error_for_invalid_settings(tmp_path, fixtures_dir, capsys):
+    exit_code = main([
+        "analyze",
+        "--input",
+        str(fixtures_dir / "inference_sample.jsonl"),
+        str(fixtures_dir / "results_sample.jsonl"),
+        "--output-dir",
+        str(tmp_path / "outs"),
+        "--llm-max-workers",
+        "0",
+    ])
+
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "llm_max_workers" in captured.err
+    assert "Traceback" not in captured.err
+
+
 def test_cli_supports_export_case_subcommand(tmp_path, fixtures_dir):
     output_dir = tmp_path / "outs"
 
@@ -135,6 +406,35 @@ def test_cli_supports_export_case_subcommand(tmp_path, fixtures_dir):
     assert export_exit == 0
     assert target.exists()
     assert "# 案例 2" in target.read_text(encoding="utf-8")
+
+
+def test_cli_supports_diagnose_env_subcommand(tmp_path, capsys):
+    output_dir = tmp_path / "outs"
+
+    exit_code = main([
+        "diagnose-env",
+        "--output-dir",
+        str(output_dir),
+    ])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert exit_code == 0
+    assert payload["output_dir"] == str(output_dir)
+    assert "python" in payload
+    assert "sandbox" in payload
+    assert "runners" in payload
+    assert "llm_env" in payload
+
+
+def test_ci_workflow_runs_pytest_without_real_llm_overrides():
+    workflow = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "ci.yml"
+    assert workflow.exists()
+    content = workflow.read_text(encoding="utf-8")
+    assert "pytest -q" in content
+    assert "FAULTLENS_API_KEY: \"\"" in content
+    assert "FAULTLENS_BASE_URL: \"\"" in content
+    assert "FAULTLENS_MODEL: \"\"" in content
 
 
 def test_cli_case_id_only_affects_extra_exemplar_export(tmp_path, fixtures_dir):
