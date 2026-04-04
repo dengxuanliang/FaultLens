@@ -72,10 +72,38 @@ This means resume is driven by persisted task state inside `run.db`, not by resc
 
 ## Quickstart
 
-### Run directly from source
+### Linux clone-to-run setup
+
+FaultLens targets Python `>=3.11`. On a Linux host that already has Python 3.11 installed:
 
 ```bash
-PYTHONPATH=src python3 -m faultlens.cli analyze \
+git clone <your-repo-url>
+cd FaultLens
+./scripts/bootstrap.sh
+source .venv/bin/activate
+faultlens --help
+```
+
+If you do not want to activate the virtual environment, use the thin wrapper instead:
+
+```bash
+./scripts/run.sh --help
+```
+
+### Analyze a paired input batch
+
+After bootstrap, run the CLI either through the activated environment:
+
+```bash
+faultlens analyze \
+  --input path/to/file-a.jsonl path/to/file-b.jsonl \
+  --output-dir ./outputs
+```
+
+Or through the wrapper script without activating `.venv`:
+
+```bash
+./scripts/run.sh analyze \
   --input path/to/file-a.jsonl path/to/file-b.jsonl \
   --output-dir ./outputs
 ```
@@ -86,6 +114,23 @@ Create a project-local `.env` file (auto-loaded from the current working directo
 
 ```bash
 cp .env.example .env
+```
+
+Then fill your provider settings, for example:
+
+```dotenv
+FAULTLENS_API_KEY=your-key
+FAULTLENS_BASE_URL=https://your-provider.example/v1
+FAULTLENS_MODEL=your-model
+```
+
+If you prefer not to store credentials in `.env`, shell environment variables override `.env` values:
+
+```bash
+export FAULTLENS_API_KEY=your-key
+export FAULTLENS_BASE_URL=https://your-provider.example/v1
+export FAULTLENS_MODEL=your-model
+faultlens analyze --input path/to/file-a.jsonl path/to/file-b.jsonl
 ```
 
 Supported environment variables:
@@ -116,7 +161,7 @@ If LLM settings are absent or the endpoint is unavailable, FaultLens falls back 
 Use the exact same input files and output directory:
 
 ```bash
-PYTHONPATH=src python3 -m faultlens.cli analyze \
+faultlens analyze \
   --input path/to/file-a.jsonl path/to/file-b.jsonl \
   --output-dir ./outputs \
   --resume
@@ -140,7 +185,7 @@ If any of these drift, FaultLens rejects resume instead of continuing unsafely.
 If `run.db` already exists, you can rebuild reports without rescanning the source JSONL files:
 
 ```bash
-PYTHONPATH=src python3 -m faultlens.cli rerender \
+faultlens rerender \
   --output-dir ./outputs
 ```
 
@@ -149,7 +194,7 @@ PYTHONPATH=src python3 -m faultlens.cli rerender \
 For operational checks against an existing output directory:
 
 ```bash
-PYTHONPATH=src python3 -m faultlens.cli status \
+faultlens status \
   --output-dir ./outputs
 ```
 
@@ -158,7 +203,7 @@ This prints the current run context as JSON, including case counts, `job_status_
 For a human-readable terminal summary instead of JSON:
 
 ```bash
-PYTHONPATH=src python3 -m faultlens.cli status \
+faultlens status \
   --output-dir ./outputs \
   --pretty
 ```
@@ -168,7 +213,7 @@ PYTHONPATH=src python3 -m faultlens.cli status \
 To quickly validate whether an existing output directory still has the expected top-level artifacts:
 
 ```bash
-PYTHONPATH=src python3 -m faultlens.cli inspect-output \
+faultlens inspect-output \
   --output-dir ./outputs
 ```
 
@@ -191,7 +236,7 @@ When possible, it also returns `recommended_actions` describing whether `rerende
 To quickly inspect whether the current host can run the expected deterministic pipeline:
 
 ```bash
-PYTHONPATH=src python3 -m faultlens.cli diagnose-env \
+faultlens diagnose-env \
   --output-dir ./outputs
 ```
 
@@ -202,7 +247,7 @@ This prints a read-only JSON snapshot with Python version, sandbox availability,
 To rerender a single case markdown from persisted state:
 
 ```bash
-PYTHONPATH=src python3 -m faultlens.cli export-case \
+faultlens export-case \
   --output-dir ./outputs \
   --case-id 42
 ```
@@ -309,7 +354,7 @@ FaultLens is aimed at durable local batch analysis, but the following boundaries
 The current repository state has fresh full-test verification on `main`:
 
 - `pytest -q`
-- latest verified result: `133 passed`
+- latest verified result: `144 passed`
 
 ## Exit Codes
 
