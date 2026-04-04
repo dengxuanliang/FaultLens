@@ -57,6 +57,13 @@ def run_analysis(
             current_inputs=input_snapshots,
             analysis_version=ANALYSIS_VERSION,
             prompt_version=PROMPT_VERSION,
+            settings={
+                "model": settings.model,
+                "llm_max_workers": settings.llm_max_workers,
+                "llm_max_retries": settings.llm_max_retries,
+                "llm_retry_backoff_seconds": settings.llm_retry_backoff_seconds,
+                "llm_retry_on_5xx": settings.llm_retry_on_5xx,
+            },
         )
         run_store.requeue_expired_leases(now=_utcnow_iso())
         run_store.expire_retryable_jobs(
@@ -191,7 +198,6 @@ def run_analysis(
         case_id=case_id,
         llm_warnings=llm_warnings,
         llm_response_stats=llm_response_stats,
-        checkpoint_path=None,
         execution_mode="streaming",
         run_store=run_store,
     )
@@ -211,7 +217,6 @@ def finalize_outputs(
     case_id: Optional[str] = None,
     llm_warnings: Optional[list[str]] = None,
     llm_response_stats: Optional[Dict[str, Any]] = None,
-    checkpoint_path: Path | None = None,
     execution_mode: str = "rerender",
     run_store: RunStore | None = None,
 ):
@@ -232,7 +237,6 @@ def finalize_outputs(
             summary=summary,
             llm_warnings=llm_warnings,
             llm_response_stats=llm_response_stats,
-            checkpoint_path=checkpoint_path,
             execution_mode=execution_mode,
         )
         (output_dir / "analysis_report.md").write_text(
@@ -292,7 +296,6 @@ def _prepare_output_dir(output_dir: Path, *, resume: bool) -> None:
         output_dir / "run_metadata.json",
         output_dir / "hierarchical_root_cause_report.md",
         output_dir / "case_analysis.jsonl",
-        output_dir / "faultlens_checkpoint.sqlite3",
         output_dir / "run.db",
         output_dir / "input_manifest.json",
         output_dir / "analysis_manifest.json",
@@ -709,7 +712,6 @@ def _build_run_context(
     summary,
     llm_warnings: list[str],
     llm_response_stats: Dict[str, Any],
-    checkpoint_path: Path | None,
     execution_mode: str,
 ) -> Dict[str, Any]:
     metadata = run_store.load_run_metadata()
@@ -742,7 +744,6 @@ def _build_run_context(
             for status in ("llm_pending", "llm_running", "llm_failed_retryable")
         ),
         "execution_mode": execution_mode,
-        "checkpoint_path": str(checkpoint_path) if checkpoint_path else None,
     }
 
 
@@ -811,6 +812,38 @@ def _excerpt_text(text: str | None, *, limit: int = 200) -> str | None:
 
 def _result_from_row(row: Dict[str, Any]) -> AttributionResult:
     return AttributionResult(**row)
+
+
+def export_case_report(*, output_dir: Path, case_id: str, dest: Path | None = None) -> Path:
+    output_dir = Path(output_dir)
+    run_store = RunStore(output_dir / "run.db").open()
+    try:
+        row = run_store.load_final_result_row(str(case_id))
+        result = _result_from_row(row)
+    finally:
+        run_store.close()
+
+    destination = Path(dest) if dest is not None else output_dir / "cases" / f"{case_id}.md"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(render_case_report(result), encoding="utf-8")
+    return destination
+
+
+def load_run_status(*, output_dir: Path) -> Dict[str, Any]:
+    output_dir = Path(output_dir)
+    run_store = RunStore(output_dir / "run.db").open()
+    try:
+        summary = _summarize_results_from_store(run_store)
+        llm_warnings, llm_response_stats = _rebuild_llm_state_from_store(run_store)
+        return _build_run_context(
+            run_store=run_store,
+            summary=summary,
+            llm_warnings=llm_warnings,
+            llm_response_stats=llm_response_stats,
+            execution_mode="status",
+        )
+    finally:
+        run_store.close()
 
 
 def _iter_results(case_analysis_path: Path) -> Iterator[AttributionResult]:

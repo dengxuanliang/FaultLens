@@ -113,6 +113,82 @@ def test_cli_resume_skips_already_checkpointed_cases(tmp_path: Path):
     assert call_count["value"] == 0
 
 
+def test_cli_resume_rejects_runtime_setting_drift(tmp_path: Path):
+    inference_path = tmp_path / "inference.jsonl"
+    results_path = tmp_path / "results.jsonl"
+    output_dir = tmp_path / "outputs"
+
+    _write_large_fixture(
+        inference_path,
+        [
+            {
+                "id": 1,
+                "content": "Double 1",
+                "canonical_solution": "def solve(x):\n    return x * 2",
+                "labels": {"programming_language": "python", "execution_language": "python"},
+                "test": {"code": "assert solve(2) == 4\nassert solve(7) == 14"},
+                "completion": "```python\ndef solve(x):\n    return x + 2\n```",
+            }
+        ],
+    )
+    _write_large_fixture(
+        results_path,
+        [
+            {
+                "task_id": 1,
+                "accepted": False,
+                "passed_at_1": 0,
+                "pass_at_k": 0,
+                "all_k_correct": 0,
+                "n": 1,
+                "programming_language": "python",
+            }
+        ],
+    )
+
+    first = main(
+        [
+            "analyze",
+            "--input",
+            str(inference_path),
+            str(results_path),
+            "--output-dir",
+            str(output_dir),
+            "--api-key",
+            "k",
+            "--base-url",
+            "http://invalid.local",
+            "--model",
+            "m",
+            "--llm-max-retries",
+            "2",
+            "--resume",
+        ]
+    )
+    assert first == 0
+
+    with pytest.raises(ValueError, match="settings mismatch"):
+        main(
+            [
+                "analyze",
+                "--input",
+                str(inference_path),
+                str(results_path),
+                "--output-dir",
+                str(output_dir),
+                "--api-key",
+                "k",
+                "--base-url",
+                "http://invalid.local",
+                "--model",
+                "m",
+                "--llm-max-retries",
+                "5",
+                "--resume",
+            ]
+        )
+
+
 def test_cli_retries_retryable_llm_jobs_only_after_backoff_window(tmp_path: Path, monkeypatch):
     inference_path = tmp_path / "inference.jsonl"
     results_path = tmp_path / "results.jsonl"

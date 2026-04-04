@@ -20,7 +20,6 @@ class Settings:
     llm_retry_backoff_seconds: int = 2
     llm_retry_on_5xx: bool = True
     resume: bool = False
-    enable_checkpoints: bool = True
 
 
 
@@ -38,7 +37,6 @@ def load_settings(
     llm_retry_backoff_seconds: Optional[int] = None,
     llm_retry_on_5xx: Optional[bool] = None,
     resume: Optional[bool] = None,
-    enable_checkpoints: Optional[bool] = None,
 ) -> Settings:
     env_values = merge_env(load_dotenv(env_path))
     return Settings(
@@ -53,7 +51,6 @@ def load_settings(
         llm_retry_backoff_seconds=max(1, int(llm_retry_backoff_seconds or env_values.get("FAULTLENS_LLM_RETRY_BACKOFF_SECONDS", 2))),
         llm_retry_on_5xx=_parse_bool(llm_retry_on_5xx, env_values.get("FAULTLENS_LLM_RETRY_ON_5XX"), default=True),
         resume=_parse_bool(resume, env_values.get("FAULTLENS_RESUME"), default=False),
-        enable_checkpoints=_parse_bool(enable_checkpoints, env_values.get("FAULTLENS_ENABLE_CHECKPOINTS"), default=True),
     )
 
 

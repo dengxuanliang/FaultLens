@@ -308,12 +308,24 @@ class RunStore:
         current_inputs: list[dict[str, Any]],
         analysis_version: str,
         prompt_version: str,
+        settings: dict[str, Any],
     ) -> None:
         metadata = self.load_run_metadata()
         if metadata["analysis_version"] != analysis_version:
             raise ValueError("analysis version mismatch; resume is not safe")
         if metadata["prompt_version"] != prompt_version:
             raise ValueError("prompt version mismatch; resume is not safe")
+        stored_settings = metadata.get("settings_json") or {}
+        comparable_settings = (
+            "model",
+            "llm_max_workers",
+            "llm_max_retries",
+            "llm_retry_backoff_seconds",
+            "llm_retry_on_5xx",
+        )
+        for key in comparable_settings:
+            if stored_settings.get(key) != settings.get(key):
+                raise ValueError(f"settings mismatch for {key}; resume is not safe")
         stored_inputs = self.load_input_files()
         comparable_keys = [
             "path",
@@ -886,6 +898,16 @@ class RunStore:
         connection = self._require_connection()
         row = connection.execute("SELECT COUNT(*) AS value FROM final_results").fetchone()
         return int(row["value"])
+
+    def load_final_result_row(self, case_id: str) -> dict[str, Any]:
+        connection = self._require_connection()
+        row = connection.execute(
+            "SELECT final_result_json FROM final_results WHERE case_id = ?",
+            (case_id,),
+        ).fetchone()
+        if row is None:
+            raise KeyError(case_id)
+        return json.loads(row["final_result_json"])
 
     def has_final_result(self, case_id: str) -> bool:
         connection = self._require_connection()

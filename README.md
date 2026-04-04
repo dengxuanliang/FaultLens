@@ -100,7 +100,6 @@ Supported environment variables:
 - `FAULTLENS_LLM_RETRY_BACKOFF_SECONDS`
 - `FAULTLENS_LLM_RETRY_ON_5XX`
 - `FAULTLENS_RESUME`
-- `FAULTLENS_ENABLE_CHECKPOINTS` (deprecated, ignored by the durable run-store pipeline)
 
 CLI flags:
 - `--llm-max-workers`
@@ -108,7 +107,7 @@ CLI flags:
 - `--llm-retry-backoff-seconds`
 - `--llm-retry-on-5xx` / `--no-llm-retry-on-5xx`
 - `--resume`
-- `--disable-checkpoints` (deprecated no-op)
+- `--case-id` to export one failed case as an extra exemplar alongside the normal full-case export
 
 If LLM settings are absent or the endpoint is unavailable, FaultLens falls back to deterministic-only attribution and still writes reports.
 
@@ -132,6 +131,7 @@ Resume safety is checked against:
 - sampled record count
 - analysis version
 - prompt version
+- model and LLM retry/worker settings persisted in `run.db`
 
 If any of these drift, FaultLens rejects resume instead of continuing unsafely.
 
@@ -143,6 +143,29 @@ If `run.db` already exists, you can rebuild reports without rescanning the sourc
 PYTHONPATH=src python3 -m faultlens.cli rerender \
   --output-dir ./outputs
 ```
+
+### Inspect run status
+
+For operational checks against an existing output directory:
+
+```bash
+PYTHONPATH=src python3 -m faultlens.cli status \
+  --output-dir ./outputs
+```
+
+This prints the current run context as JSON, including case counts, job-status counts, pending LLM backlog, warning summaries, and stored model configuration.
+
+### Export one case markdown on demand
+
+To rerender a single case markdown from persisted state:
+
+```bash
+PYTHONPATH=src python3 -m faultlens.cli export-case \
+  --output-dir ./outputs \
+  --case-id 42
+```
+
+By default this rewrites `cases/42.md`. Use `--dest` to export to a different path.
 
 ## Output
 

@@ -1,4 +1,5 @@
 from faultlens.cli import main
+from faultlens.scale.run_store import RunStore
 
 
 def test_cli_requires_two_input_files(capsys):
@@ -77,3 +78,80 @@ def test_cli_supports_rerender_subcommand(tmp_path, fixtures_dir, monkeypatch):
 
     assert rerender_exit == 0
     assert (output_dir / "analysis_report.md").read_text(encoding="utf-8") == original
+
+
+def test_cli_rejects_legacy_disable_checkpoints_flag(capsys):
+    exit_code = main(["analyze", "--input", "a.jsonl", "b.jsonl", "--disable-checkpoints"])
+
+    assert exit_code == 2
+
+
+def test_cli_supports_status_subcommand(tmp_path, fixtures_dir):
+    output_dir = tmp_path / "outs"
+
+    analyze_exit = main([
+        "analyze",
+        "--input",
+        str(fixtures_dir / "inference_sample.jsonl"),
+        str(fixtures_dir / "results_sample.jsonl"),
+        "--output-dir",
+        str(output_dir),
+    ])
+    assert analyze_exit == 0
+
+    status_exit = main([
+        "status",
+        "--output-dir",
+        str(output_dir),
+    ])
+
+    assert status_exit == 0
+
+
+def test_cli_supports_export_case_subcommand(tmp_path, fixtures_dir):
+    output_dir = tmp_path / "outs"
+
+    analyze_exit = main([
+        "analyze",
+        "--input",
+        str(fixtures_dir / "inference_sample.jsonl"),
+        str(fixtures_dir / "results_sample.jsonl"),
+        "--output-dir",
+        str(output_dir),
+    ])
+    assert analyze_exit == 0
+
+    target = output_dir / "exported-case-2.md"
+    export_exit = main([
+        "export-case",
+        "--output-dir",
+        str(output_dir),
+        "--case-id",
+        "2",
+        "--dest",
+        str(target),
+    ])
+
+    assert export_exit == 0
+    assert target.exists()
+    assert "# 案例 2" in target.read_text(encoding="utf-8")
+
+
+def test_cli_case_id_only_affects_extra_exemplar_export(tmp_path, fixtures_dir):
+    output_dir = tmp_path / "outs"
+
+    exit_code = main([
+        "analyze",
+        "--input",
+        str(fixtures_dir / "inference_sample.jsonl"),
+        str(fixtures_dir / "results_sample.jsonl"),
+        "--output-dir",
+        str(output_dir),
+        "--case-id",
+        "2",
+    ])
+
+    assert exit_code == 0
+    rows = (output_dir / "case_analysis.jsonl").read_text(encoding="utf-8").splitlines()
+    assert len([line for line in rows if line.strip()]) == 2
+    assert any(path.name.endswith("-2.md") for path in (output_dir / "exemplars").glob("*.md"))

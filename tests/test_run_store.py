@@ -33,7 +33,13 @@ def test_run_store_persists_run_metadata_versions(tmp_path: Path) -> None:
         store.initialize_run_metadata(
             analysis_version="det-v1",
             prompt_version="prompt-v1",
-            settings={"llm_max_workers": 1},
+            settings={
+                "model": None,
+                "llm_max_workers": 1,
+                "llm_max_retries": 2,
+                "llm_retry_backoff_seconds": 2,
+                "llm_retry_on_5xx": True,
+            },
         )
         row = store.load_run_metadata()
     finally:
@@ -59,7 +65,13 @@ def test_run_store_rejects_changed_input_manifest(tmp_path: Path) -> None:
         store.initialize_run_metadata(
             analysis_version="det-v1",
             prompt_version="prompt-v1",
-            settings={"llm_max_workers": 1},
+            settings={
+                "model": None,
+                "llm_max_workers": 1,
+                "llm_max_retries": 2,
+                "llm_retry_backoff_seconds": 2,
+                "llm_retry_on_5xx": True,
+            },
         )
         try:
             store.assert_resume_safe(
@@ -76,6 +88,13 @@ def test_run_store_rejects_changed_input_manifest(tmp_path: Path) -> None:
                 ],
                 analysis_version="det-v1",
                 prompt_version="prompt-v1",
+                settings={
+                    "model": None,
+                    "llm_max_workers": 1,
+                    "llm_max_retries": 2,
+                    "llm_retry_backoff_seconds": 2,
+                    "llm_retry_on_5xx": True,
+                },
             )
         except ValueError as exc:
             assert "input manifest mismatch" in str(exc)
