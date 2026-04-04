@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from faultlens.models import AttributionResult
 from faultlens.reporting.aggregate import summarize_cases
 from faultlens.reporting.render import render_analysis_report, render_case_report, render_hierarchical_root_cause_report
@@ -155,14 +157,13 @@ def test_render_reports_contain_required_sections():
     assert "solution_incorrect" in hierarchy_report
 
     assert "# 案例 1" in case_report
-    assert "## 语言" in case_report
-    assert "## 生成代码" in case_report
+    assert "## 代码与语言" in case_report
     assert "## 解析 / 编译 / 测试" in case_report
     assert "## 三层错因分析" in case_report
     assert "### L1 表层错误" in case_report
     assert "### L2 过程阶段错误原因" in case_report
     assert "### L3 根能力项原因" in case_report
-    assert "## 根因" in case_report
+    assert "## 归因结论" in case_report
     assert "## 警告" in case_report
     assert "## 解释" in case_report
     assert "logic mismatch" in case_report
@@ -224,3 +225,59 @@ def test_render_analysis_report_uses_section_specific_denominators():
     assert "| 待复核数量 | 占失败样本比例 | 图示 | Case IDs |" in report
     assert "解答逻辑错误 | 1 | 100.0%" in report
     assert "| 1 | 50.0% |" in report
+
+
+def test_render_case_report_uses_structured_markdown_blocks():
+    result = AttributionResult(
+        case_id="7",
+        case_status="attributable_failure",
+        accepted=False,
+        root_cause="solution_incorrect",
+        deterministic_signals=["test_failure", "logic_mismatch"],
+        llm_signals=["json"],
+        observable_evidence=["assert solve(7) == 14 failed", "solve(7) returned 10"],
+        evidence_refs=[{"source": "tests", "line": 3}],
+        deterministic_findings={
+            "primary_language": "python",
+            "completion_code": "def solve(x):\n    return x + 3",
+            "parse_status": "ok",
+            "compile_status": "ok",
+            "test_status": "failed",
+            "failing_assert_excerpt": "assert solve(7) == 14",
+            "runtime_error_excerpt": None,
+            "canonical_diff_summary": "uses addition instead of multiplication",
+            "test_harness_alignment_summary": "matches expected solve(x) signature",
+        },
+        llm_judgment=None,
+        final_decision_source="deterministic_plus_llm",
+        confidence=0.91,
+        needs_human_review=True,
+        review_reason="possible_evaluation_mismatch",
+        improvement_hints=["use multiplication", "re-run against reference tests"],
+        explanation="The implementation adds 3 instead of doubling x.",
+        llm_parse_mode="strict_json",
+        llm_parse_reason=None,
+        llm_raw_response_excerpt='{"root_cause":"solution_incorrect"}',
+        llm_raw_response_path="llm_raw_responses/7.txt",
+        llm_raw_response_sha256="abc123",
+        hierarchical_cause={
+            "l1": {"label": "功能/语义错误", "subtype": "wrong_output", "rationale": "输出错误", "evidence": ["solve(7) returned 10"]},
+            "l2": {"label": "代码实现与局部逻辑", "subtype": "local_logic_bug", "rationale": "局部逻辑错误", "evidence": ["assert solve(7) == 14"]},
+            "l3": {"label": "状态、控制流与不变量维护", "subtype": "operator_logic_error", "rationale": "运算符错误", "evidence": ["return x + 3"]},
+        },
+    )
+
+    case_report = render_case_report(result)
+
+    assert "## 代码与语言" in case_report
+    assert "```python" in case_report
+    assert "def solve(x):" in case_report
+    assert "## 可观察证据" in case_report
+    assert "- assert solve(7) == 14 failed" in case_report
+    assert "## 证据引用" in case_report
+    assert "```json" in case_report
+    assert json.dumps(result.evidence_refs, ensure_ascii=False, indent=2) in case_report
+    assert "## 调试建议" in case_report
+    assert "- use multiplication" in case_report
+    assert "## 解析摘录" in case_report
+    assert "assert solve(7) == 14" in case_report

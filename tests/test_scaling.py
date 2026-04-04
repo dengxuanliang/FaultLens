@@ -945,3 +945,114 @@ def test_cli_resume_processes_llm_pending_jobs_without_rerunning_deterministic(t
         assert store.count_final_results() == 4
     finally:
         store.close()
+
+
+def test_cli_resume_rebuilds_selected_llm_result_from_response_file(tmp_path: Path, monkeypatch):
+    inference_path = tmp_path / "inference.jsonl"
+    results_path = tmp_path / "results.jsonl"
+    output_dir = tmp_path / "outputs"
+
+    _write_large_fixture(
+        inference_path,
+        [
+            {
+                "id": 1,
+                "content": "Double 1",
+                "canonical_solution": "def solve(x):\n    return x * 2",
+                "labels": {"programming_language": "python", "execution_language": "python"},
+                "test": {"code": "assert solve(2) == 4\nassert solve(7) == 14"},
+                "completion": "```python\ndef solve(x):\n    return x + 2\n```",
+            }
+        ],
+    )
+    _write_large_fixture(
+        results_path,
+        [
+            {
+                "task_id": 1,
+                "accepted": False,
+                "passed_at_1": 0,
+                "pass_at_k": 0,
+                "all_k_correct": 0,
+                "n": 1,
+                "programming_language": "python",
+            }
+        ],
+    )
+
+    import faultlens.orchestrator as orchestrator
+
+    class StrictJsonClient:
+        def __init__(self, settings):
+            self.enabled = True
+            self.last_warning = None
+            self.last_completion_info = {
+                "status": "strict_json",
+                "invalid_reason": None,
+                "raw_response_excerpt": '{"root_cause":"solution_incorrect"}',
+                "raw_response_text": '{"root_cause":"solution_incorrect","explanation":"logic mismatch","observable_evidence":["assert failed"],"improvement_hints":[],"llm_signals":["json"],"evidence_refs":[{"source":"tests"}]}',
+                "raw_response_sha256": "abc123",
+            }
+
+        def complete_json(self, messages):
+            return {
+                "root_cause": "solution_incorrect",
+                "explanation": "logic mismatch",
+                "observable_evidence": ["assert failed"],
+                "improvement_hints": [],
+                "llm_signals": ["json"],
+                "evidence_refs": [{"source": "tests"}],
+            }
+
+    monkeypatch.setattr(orchestrator, "LLMClient", StrictJsonClient)
+
+    first = main(
+        [
+            "analyze",
+            "--input",
+            str(inference_path),
+            str(results_path),
+            "--output-dir",
+            str(output_dir),
+            "--api-key",
+            "k",
+            "--base-url",
+            "http://invalid.local",
+            "--model",
+            "m",
+            "--resume",
+        ]
+    )
+    assert first == 0
+
+    store = RunStore(output_dir / "run.db").open()
+    try:
+        connection = store._require_connection()
+        connection.execute("DELETE FROM final_results")
+        connection.execute("UPDATE analysis_jobs SET job_status = 'llm_done' WHERE case_id = ?", ("1",))
+        connection.commit()
+    finally:
+        store.close()
+
+    second = main(
+        [
+            "analyze",
+            "--input",
+            str(inference_path),
+            str(results_path),
+            "--output-dir",
+            str(output_dir),
+            "--api-key",
+            "k",
+            "--base-url",
+            "http://invalid.local",
+            "--model",
+            "m",
+            "--resume",
+        ]
+    )
+
+    assert second == 0
+    rows = [json.loads(line) for line in (output_dir / "case_analysis.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert rows[0]["final_decision_source"] == "deterministic_plus_llm"
+    assert rows[0]["root_cause"] == "solution_incorrect"

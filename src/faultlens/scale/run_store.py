@@ -704,6 +704,7 @@ class RunStore:
         parse_mode: str | None,
         parse_reason: str | None,
         response_text: str | None,
+        response_path: str | None,
         response_sha256: str | None,
         error_type: str | None,
         error_message: str | None,
@@ -735,11 +736,12 @@ class RunStore:
                 error_type,
                 error_message,
                 response_text,
+                response_path,
                 response_sha256,
                 parse_mode,
                 parse_reason,
                 is_selected
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 case_id,
@@ -756,6 +758,7 @@ class RunStore:
                 error_type,
                 error_message,
                 response_text,
+                response_path,
                 response_sha256,
                 parse_mode,
                 parse_reason,
@@ -786,6 +789,7 @@ class RunStore:
                 error_type,
                 error_message,
                 response_text,
+                response_path,
                 response_sha256,
                 parse_mode,
                 parse_reason,
@@ -926,6 +930,7 @@ class RunStore:
                 attempt_index,
                 error_message,
                 response_text,
+                response_path,
                 parse_mode,
                 parse_reason
             FROM llm_attempts

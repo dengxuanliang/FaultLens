@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 BASE_SCHEMA_SQL = """
@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS llm_attempts (
     error_type TEXT,
     error_message TEXT,
     response_text TEXT,
+    response_path TEXT,
     response_sha256 TEXT,
     parse_mode TEXT,
     parse_reason TEXT,
@@ -137,8 +138,23 @@ def _migration_1_to_2(connection) -> None:
     )
 
 
+def _migration_2_to_3(connection) -> None:
+    has_table = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'llm_attempts' LIMIT 1"
+    ).fetchone()
+    if not has_table:
+        return
+    columns = {
+        str(row[1])
+        for row in connection.execute("PRAGMA table_info(llm_attempts)").fetchall()
+    }
+    if "response_path" not in columns:
+        connection.execute("ALTER TABLE llm_attempts ADD COLUMN response_path TEXT")
+
+
 MIGRATIONS = {
     1: _migration_1_to_2,
+    2: _migration_2_to_3,
 }
 
 

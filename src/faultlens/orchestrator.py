@@ -546,7 +546,8 @@ def _flush_llm_batch(
             outcome=parse_info.get("status") or ("completed" if llm_result else "unknown"),
             parse_mode=parse_info.get("status"),
             parse_reason=parse_info.get("invalid_reason"),
-            response_text=parse_info.get("raw_response_text"),
+            response_text=None,
+            response_path=parse_info.get("raw_response_path"),
             response_sha256=parse_info.get("raw_response_sha256"),
             error_type=parse_info.get("error_type"),
             error_message=warning,
@@ -758,13 +759,14 @@ def _rebuild_llm_state_from_store(run_store: RunStore) -> tuple[list[str], Dict[
         warning = row.get("error_message")
         if warning:
             warnings.append(warning)
+        response_text = row.get("response_text") or _read_response_text(run_store, row.get("response_path"))
         _update_llm_stats(
             stats,
             str(row.get("case_id")),
             {
                 "status": row.get("parse_mode"),
                 "invalid_reason": row.get("parse_reason"),
-                "raw_response_excerpt": _excerpt_text(row.get("response_text")),
+                "raw_response_excerpt": _excerpt_text(response_text),
             },
         )
     if stats["attempted"]:
@@ -785,7 +787,7 @@ def _load_selected_llm_result(run_store: RunStore, case_id: str) -> tuple[Option
             "raw_response_sha256": None,
         }
     selected = next((row for row in attempts if row.get("is_selected")), attempts[-1])
-    response_text = selected.get("response_text")
+    response_text = selected.get("response_text") or _read_response_text(run_store, selected.get("response_path"))
     parsed_payload = None
     if response_text:
         parsed = parse_attribution_response(response_text)
@@ -795,7 +797,7 @@ def _load_selected_llm_result(run_store: RunStore, case_id: str) -> tuple[Option
         "status": selected.get("parse_mode"),
         "invalid_reason": selected.get("parse_reason"),
         "raw_response_excerpt": _excerpt_text(response_text),
-        "raw_response_path": None,
+        "raw_response_path": selected.get("response_path"),
         "raw_response_sha256": selected.get("response_sha256"),
     }
 
@@ -807,6 +809,15 @@ def _excerpt_text(text: str | None, *, limit: int = 200) -> str | None:
     if len(normalized) <= limit:
         return normalized
     return normalized[: limit - 3] + "..."
+
+
+def _read_response_text(run_store: RunStore, response_path: str | None) -> str | None:
+    if not response_path:
+        return None
+    raw_path = run_store.path.parent / response_path
+    if not raw_path.exists():
+        return None
+    return raw_path.read_text(encoding="utf-8")
 
 
 

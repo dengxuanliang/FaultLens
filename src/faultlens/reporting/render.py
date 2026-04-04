@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import StringIO
+import json
 
 from faultlens.attribution.hierarchy import L1_LABELS, L2_LABELS, L3_LABELS
 from faultlens.models import AttributionResult, SummaryReport
@@ -42,45 +43,92 @@ def render_analysis_report(summary: SummaryReport, results: list[AttributionResu
 def render_case_report(result: AttributionResult) -> str:
     findings = result.deterministic_findings
     hierarchy = result.hierarchical_cause or {}
+    language = str(findings.get("primary_language", "unknown"))
+    completion_code = str(findings.get("completion_code", "") or "")
     lines = [
         f"# 案例 {result.case_id}",
         "## 基本信息",
         f"- 案例状态：{display_case_status(result.case_status)}",
         f"- Accepted：{result.accepted}",
-        "## 语言",
-        str(findings.get("primary_language", "unknown")),
-        "## 生成代码",
-        str(findings.get("completion_code", "")),
+        f"- 最终归因来源：{result.final_decision_source}",
+        f"- 置信度：{result.confidence if result.confidence is not None else '无'}",
+        f"- 是否需要人工复核：{'是' if result.needs_human_review else '否'}",
+        f"- 复核原因：{result.review_reason or '无'}",
+        "## 代码与语言",
+        f"- 语言：{language}",
+        _format_code_block(completion_code, language),
         "## 解析 / 编译 / 测试",
         f"- 解析：{findings.get('parse_status', 'unknown')}",
         f"- 编译：{findings.get('compile_status', 'unknown')}",
         f"- 测试：{findings.get('test_status', 'unknown')}",
         "## 确定性信号",
         display_signals(result.deterministic_signals),
-        "## 根因",
-        display_root_cause(result.root_cause),
+        "## 归因结论",
+        f"- 主根因：{display_root_cause(result.root_cause)}",
+        f"- 次根因：{display_root_cause(result.secondary_cause)}",
+        f"- LLM 信号：{', '.join(result.llm_signals) if result.llm_signals else '无'}",
+        "## 解释",
+        result.explanation or "无",
+        "## 可观察证据",
+        _format_bullet_list(result.observable_evidence),
+        "## 解析摘录",
+        _format_excerpt_section(findings),
+        "## 确定性分析摘要",
+        f"- Canonical Diff：{findings.get('canonical_diff_summary', 'n/a')}",
+        f"- Harness Alignment：{findings.get('test_harness_alignment_summary', 'n/a')}",
+        "## 证据引用",
+        _format_json_block(result.evidence_refs),
         "## 三层错因分析",
         _format_hierarchical_case_section(hierarchy),
-        "## 解释",
-        result.explanation,
-        "## Canonical Diff",
-        str(findings.get("canonical_diff_summary", "n/a")),
-        "## Harness Alignment",
-        str(findings.get("test_harness_alignment_summary", "n/a")),
-        "## 证据引用",
-        str(result.evidence_refs),
         "## LLM 解析信息",
         f"- LLM 解析模式：{result.llm_parse_mode or '无'}",
         f"- LLM 解析原因：{result.llm_parse_reason or '无'}",
-        f"- 原始回复摘录：{result.llm_raw_response_excerpt or '无'}",
         f"- 原始回复文件：{result.llm_raw_response_path or '无'}",
         f"- 原始回复 SHA256：{result.llm_raw_response_sha256 or '无'}",
+        _format_optional_code_block(result.llm_raw_response_excerpt, "json"),
         "## 警告",
-        ("\n".join(f"- {warning}" for warning in result.warnings) if result.warnings else "- 无"),
+        _format_bullet_list(result.warnings),
         "## 调试建议",
-        "\n".join(f"- {hint}" for hint in result.improvement_hints) if result.improvement_hints else "- 无",
+        _format_bullet_list(result.improvement_hints),
     ]
     return "\n".join(lines) + "\n"
+
+
+def _format_code_block(code: str, language: str) -> str:
+    if not code:
+        return "_无代码_"
+    return f"```{language or ''}\n{code}\n```"
+
+
+def _format_optional_code_block(content: str | None, language: str = "") -> str:
+    if not content:
+        return "- 原始回复摘录：无"
+    return f"- 原始回复摘录：\n```{language}\n{content}\n```"
+
+
+def _format_bullet_list(items: list[str]) -> str:
+    if not items:
+        return "- 无"
+    return "\n".join(f"- {item}" for item in items)
+
+
+def _format_json_block(payload) -> str:
+    if not payload:
+        return "_无_"
+    return f"```json\n{json.dumps(payload, ensure_ascii=False, indent=2)}\n```"
+
+
+def _format_excerpt_section(findings: dict) -> str:
+    excerpts = []
+    for label, key in (
+        ("失败断言", "failing_assert_excerpt"),
+        ("运行时报错", "runtime_error_excerpt"),
+        ("语法解析错误", "parse_error_excerpt"),
+    ):
+        value = findings.get(key)
+        if value:
+            excerpts.append(f"### {label}\n```\n{value}\n```")
+    return "\n\n".join(excerpts) if excerpts else "- 无"
 
 
 def render_hierarchical_root_cause_report(summary: SummaryReport, results: list[AttributionResult]) -> str:

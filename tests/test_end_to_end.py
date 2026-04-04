@@ -61,10 +61,10 @@ def test_cli_analyze_generates_outputs(tmp_path: Path, fixtures_dir: Path, monke
 
     case_one_text = (output_dir / "cases" / "1.md").read_text(encoding="utf-8")
     assert "## 基本信息" in case_one_text
-    assert "## 根因" in case_one_text
+    assert "## 归因结论" in case_one_text
 
     case_text = (output_dir / "cases" / "2.md").read_text(encoding="utf-8")
-    assert "## 根因" in case_text
+    assert "## 归因结论" in case_text
     assert "## 解释" in case_text
     assert "## 解析 / 编译 / 测试" in case_text
     assert "## LLM 解析信息" in case_text
@@ -436,7 +436,9 @@ def test_cli_persists_llm_attempt_audit_records(tmp_path: Path, fixtures_dir: Pa
 
     assert len(attempts) == 1
     assert '"role": "system"' in attempts[0]["request_messages_json"]
-    assert "logic mismatch" in attempts[0]["response_text"]
+    assert attempts[0]["response_text"] is None
+    assert attempts[0]["response_path"] == "llm_raw_responses/2.txt"
+    assert attempts[0]["response_sha256"] == "abc123"
     assert attempts[0]["parse_mode"] == "strict_json"
     assert job["job_status"] == "finalized"
 

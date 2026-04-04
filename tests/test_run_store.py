@@ -214,3 +214,32 @@ def test_run_store_migrates_v1_database_to_latest_schema(tmp_path: Path) -> None
     assert metadata["schema_version"] == SCHEMA_VERSION
     assert "run_warnings" in tables
     assert warnings[0]["message"] == "legacy warning"
+
+
+def test_run_store_records_response_path_without_inline_raw_body(tmp_path: Path) -> None:
+    store = RunStore(tmp_path / "run.db").open()
+    try:
+        store.record_llm_attempt(
+            case_id="2",
+            attempt_index=1,
+            request_messages=[{"role": "system", "content": "x"}],
+            provider_model="m",
+            provider_base_url="http://invalid.local",
+            started_at="2026-04-04T00:00:00+00:00",
+            finished_at="2026-04-04T00:00:01+00:00",
+            outcome="strict_json",
+            parse_mode="strict_json",
+            parse_reason=None,
+            response_text=None,
+            response_path="llm_raw_responses/2.txt",
+            response_sha256="abc123",
+            error_type=None,
+            error_message=None,
+            http_status=None,
+        )
+        attempts = store.list_llm_attempts("2")
+    finally:
+        store.close()
+
+    assert attempts[0]["response_text"] is None
+    assert attempts[0]["response_path"] == "llm_raw_responses/2.txt"

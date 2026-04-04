@@ -13,6 +13,22 @@ def test_load_dotenv_reads_project_env(tmp_path):
     assert values["FAULTLENS_MODEL"] == "test-model"
 
 
+def test_load_dotenv_supports_export_quotes_and_inline_comments(tmp_path):
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        'export FAULTLENS_MODEL="quoted-model" # keep this comment\n'
+        "FAULTLENS_BASE_URL='https://example.invalid/v1'  # trailing comment\n"
+        "FAULTLENS_API_KEY=plain-value\n",
+        encoding="utf-8",
+    )
+
+    values = load_dotenv(env_path)
+
+    assert values["FAULTLENS_MODEL"] == "quoted-model"
+    assert values["FAULTLENS_BASE_URL"] == "https://example.invalid/v1"
+    assert values["FAULTLENS_API_KEY"] == "plain-value"
+
+
 def test_load_settings_prefers_explicit_values(tmp_path):
     env_path = tmp_path / ".env"
     env_path.write_text(

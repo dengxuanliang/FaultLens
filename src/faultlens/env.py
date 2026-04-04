@@ -14,9 +14,29 @@ def load_dotenv(env_path: Optional[Path]) -> Dict[str, str]:
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
         key, value = line.split("=", 1)
-        values[key.strip()] = value.strip()
+        values[key.strip()] = _parse_dotenv_value(value.strip())
     return values
+
+
+def _parse_dotenv_value(raw_value: str) -> str:
+    if not raw_value:
+        return ""
+    if raw_value[0] in {'"', "'"}:
+        quote = raw_value[0]
+        closing_index = raw_value.find(quote, 1)
+        if closing_index != -1:
+            return raw_value[1:closing_index]
+        return raw_value[1:]
+
+    value_chars: list[str] = []
+    for index, char in enumerate(raw_value):
+        if char == "#" and (index == 0 or raw_value[index - 1].isspace()):
+            break
+        value_chars.append(char)
+    return "".join(value_chars).strip()
 
 
 def merge_env(dotenv_values: Mapping[str, str]) -> Dict[str, str]:
